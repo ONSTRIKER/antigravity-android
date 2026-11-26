@@ -2,8 +2,12 @@
 # pkg -- self-written package manager for the tlx environment.
 set -uo pipefail
 
-PKG_SELF="$(cd "$(dirname "$0")" && pwd)"
+PKG_REAL="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+PKG_SELF="$(cd "$(dirname "$PKG_REAL")" && pwd)"
 PKG_LIB="$PKG_SELF/lib"
+if [ ! -d "$PKG_LIB" ] && [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/libexec/pkg/lib" ]; then
+    PKG_LIB="$PREFIX/libexec/pkg/lib"
+fi
 
 . "$PKG_LIB/util.sh"
 . "$PKG_LIB/version.sh"

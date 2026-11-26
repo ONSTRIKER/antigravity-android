@@ -27,14 +27,15 @@ env/
 │   ├── bin/                # Системные скрипты и утилиты AGY
 │   │   ├── agy-daemon      # Фоновый автономный диспетчер задач и планировщик (ConnectRPC + shell)
 │   │   ├── agy-fix-paths   # Утилита динамической нормализации шебангов и путей
-│   │   ├── agy-mcp-android # Нативный stdio MCP-сервер (SystemGateway, браузер, Shizuku, daemon)
+│   │   ├── agy-grant-all   # Утилита пакетной выдачи разрешений, AppOps и снятия Doze-ограничений через Shizuku (rish)
+│   │   ├── agy-mcp-android # Нативный stdio MCP-сервер (20 инструментов: Phone Agent UI/уведомления/приложения, SystemGateway, браузер, Shizuku, daemon)
 │   │   ├── agy-mcp-browser # Chrome DevTools-совместимый stdio MCP-сервер поверх Android WebView
 │   │   ├── agy-notify      # Утилита управления системными уведомлениями Android
 │   │   ├── agy-upgrade     # Менеджер безопасного обновления, бэкапа и миграций
 │   │   ├── rish            # Клиент Shizuku для привилегированного шелла (uid=2000)
 │   │   └── cs              # Заглушка для language server
 │   ├── etc/                # Системная конфигурация
-│   │   ├── antigravity/    # AGENTS.md и встроенные скиллы (skills/android-{device,browser,daemon})
+│   │   ├── antigravity/    # AGENTS.md и встроенные скиллы (skills/android-{phone-agent,device,browser,daemon})
 │   │   ├── pkg/repo.conf   # Конфигурация репозиториев pkg (зеркала Termux)
 │   │   ├── profile.d/      # Скрипты инициализации оболочки (00-env.sh)
 │   │   ├── tls/            # Сертификаты cert.pem и конфигурация openssl.cnf

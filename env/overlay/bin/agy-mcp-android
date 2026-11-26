@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 SERVER_NAME = "android-device"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_GATEWAY_PORT = 45160
@@ -662,6 +662,330 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "android_agent_status",
+        "description": (
+            "Inspect native Android Phone Agent capabilities (Accessibility UI control, "
+            "Notification Listener, battery optimization exemption, All Files Access, "
+            "overlay permission, package install permission, and active foreground app), "
+            "and optionally jump straight to a named Android system settings page."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "open_setting": {
+                    "type": "string",
+                    "enum": [
+                        "accessibility",
+                        "notification_listener",
+                        "battery",
+                        "app_details",
+                        "overlay",
+                        "install_unknown_apps",
+                        "all_files",
+                        "wifi",
+                        "bluetooth",
+                        "location",
+                        "display",
+                        "sound",
+                        "developer",
+                        "settings",
+                    ],
+                    "description": "Optional Android Settings screen to open immediately for the user.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_ui_tree",
+        "description": (
+            "Read the live cross-app semantic UI hierarchy of the Android screen via "
+            "AgyAccessibilityService (or Shizuku uiautomator fallback). Returns active "
+            "foreground package/activity, windows, and visible UI nodes with index, text, "
+            "content description, view_id, bounds, center [x, y], and clickable/editable/scrollable flags."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "interactive_only": {
+                    "type": "boolean",
+                    "description": "When true, return only clickable, editable, scrollable, checkable, or labeled nodes.",
+                },
+                "max_nodes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1500,
+                    "description": "Maximum number of UI nodes to return (default 350).",
+                },
+                "all_windows": {
+                    "type": "boolean",
+                    "description": "Include system bars, split-screen windows, and dialogs in addition to the active window.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_ui_act",
+        "description": (
+            "Perform cross-app UI interactions, touch/swipe gestures, text entry, scrolling, "
+            "or global Android navigation (back, home, recents, notifications, quick_settings, "
+            "split_screen, lock_screen) via AgyAccessibilityService."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "click",
+                        "long_click",
+                        "tap",
+                        "long_press",
+                        "swipe",
+                        "drag",
+                        "set_text",
+                        "type",
+                        "paste",
+                        "focus",
+                        "scroll_forward",
+                        "scroll_backward",
+                        "scroll_down",
+                        "scroll_up",
+                        "back",
+                        "home",
+                        "recents",
+                        "notifications",
+                        "quick_settings",
+                        "power_dialog",
+                        "split_screen",
+                        "lock_screen",
+                    ],
+                    "description": "UI action, coordinate gesture, or global hardware key to execute.",
+                },
+                "target_text": {
+                    "type": "string",
+                    "description": "Match target node by visible text (substring match unless exact=true).",
+                },
+                "desc": {
+                    "type": "string",
+                    "description": "Match target node by contentDescription / accessibility label.",
+                },
+                "view_id": {
+                    "type": "string",
+                    "description": "Match target node by Android resource id (full id or suffix, e.g. 'search_box').",
+                },
+                "node_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Match target node by its index from the latest android_ui_tree call.",
+                },
+                "exact": {
+                    "type": "boolean",
+                    "description": "Require exact case-insensitive match for target_text/desc instead of substring.",
+                },
+                "interactive_only": {
+                    "type": "boolean",
+                    "description": "Match node_index against an interactive_only=true tree snapshot.",
+                },
+                "all_windows": {
+                    "type": "boolean",
+                    "description": "Search across all interactive windows (dialogs, split-screen, system overlays).",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text value to enter into an editable field for action='set_text' or 'type'.",
+                },
+                "submit": {
+                    "type": "boolean",
+                    "description": "Send IME Enter/Search action after setting text (Android 11+).",
+                },
+                "x": {
+                    "type": "number",
+                    "description": "Screen X coordinate in pixels (for tap or long_press).",
+                },
+                "y": {
+                    "type": "number",
+                    "description": "Screen Y coordinate in pixels (for tap or long_press).",
+                },
+                "x1": {
+                    "type": "number",
+                    "description": "Start X coordinate in pixels (for swipe or drag).",
+                },
+                "y1": {
+                    "type": "number",
+                    "description": "Start Y coordinate in pixels (for swipe or drag).",
+                },
+                "x2": {
+                    "type": "number",
+                    "description": "End X coordinate in pixels (for swipe or drag).",
+                },
+                "y2": {
+                    "type": "number",
+                    "description": "End Y coordinate in pixels (for swipe or drag).",
+                },
+                "duration_ms": {
+                    "type": "integer",
+                    "minimum": 40,
+                    "maximum": 5000,
+                    "description": "Gesture stroke duration in milliseconds (default 60 for tap, 280 for swipe, 650 for long_press).",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_screenshot",
+        "description": (
+            "Capture a live PNG screenshot of the current Android display via Android 11+ "
+            "Accessibility takeScreenshot API (or Shizuku screencap fallback) and return its file path."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Optional destination PNG file path. Defaults to app cache screenshots directory.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_apps",
+        "description": (
+            "Discover installed launchable Android apps by name/keyword or launch any app "
+            "directly by package name or human-readable app label."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "launch"],
+                    "description": "List/search installed apps or launch an app into the foreground.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Case-insensitive app name or package filter (e.g. 'Chrome', 'Messages', 'Settings').",
+                },
+                "package": {
+                    "type": "string",
+                    "description": "Exact Android package name to launch (e.g. 'com.android.settings').",
+                },
+                "include_system": {
+                    "type": "boolean",
+                    "description": "Include preinstalled system apps in list results (default true).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "Maximum number of apps to return for list (default 250).",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_intent",
+        "description": (
+            "Fire an Android Intent, deep link URI (tel:, mailto:, geo:, https:, google.navigation:), "
+            "explicit Activity component, or named Android system settings screen."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "setting": {
+                    "type": "string",
+                    "description": (
+                        "Optional shortcut to open a named system Settings screen directly "
+                        "(accessibility, notification_listener, battery, app_details, overlay, "
+                        "install_unknown_apps, all_files, wifi, bluetooth, location, display, sound, developer)."
+                    ),
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Android Intent action (e.g. 'android.intent.action.VIEW', 'android.intent.action.DIAL').",
+                },
+                "uri": {
+                    "type": "string",
+                    "description": "Intent data URI (e.g. 'https://...', 'tel:+15551234567', 'geo:0,0?q=coffee').",
+                },
+                "mime_type": {
+                    "type": "string",
+                    "description": "Optional MIME type for the Intent data.",
+                },
+                "package": {
+                    "type": "string",
+                    "description": "Optional target Android package name to restrict the Intent.",
+                },
+                "component": {
+                    "type": "string",
+                    "description": "Optional flattened ComponentName ('com.example/.MainActivity').",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional Intent category.",
+                },
+                "extras": {
+                    "type": "object",
+                    "description": "Optional key/value extras map (string, boolean, integer, or number values).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_notifications",
+        "description": (
+            "Read active cross-app Android notifications, open a notification's contentIntent, "
+            "dismiss notifications, trigger action buttons, or send inline RemoteInput replies "
+            "(e.g. replying to SMS/WhatsApp/Telegram/Slack directly from the notification shade)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "open", "dismiss", "dismiss_all", "trigger_action", "reply"],
+                    "description": "Notification operation to perform.",
+                },
+                "package": {
+                    "type": "string",
+                    "description": "Optional package filter when listing notifications.",
+                },
+                "include_ongoing": {
+                    "type": "boolean",
+                    "description": "Include ongoing foreground service notifications in list (default false).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Max notifications to return for list (default 50).",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Notification sbn key from list (required for open, dismiss, trigger_action, reply).",
+                },
+                "action_index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Action button index from notification actions array (for trigger_action or reply).",
+                },
+                "reply_text": {
+                    "type": "string",
+                    "description": "Inline message text to send via RemoteInput (for action='reply').",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -989,6 +1313,154 @@ def handle_schedule_task(args):
     return {"ok": False, "error": f"unsupported action: {action}"}
 
 
+def _try_quick_rish(command, timeout_sec=5):
+    rish_bin = _find_rish_bin()
+    if not os.path.isfile(rish_bin):
+        return None
+    try:
+        proc = subprocess.run(
+            [rish_bin, "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+        if proc.returncode == 0:
+            return (proc.stdout or "").strip()
+    except Exception:
+        pass
+    return None
+
+
+def handle_agent_status(args):
+    payload = {}
+    if args.get("open_setting"):
+        payload["open_setting"] = str(args["open_setting"])
+    return gateway_post("ui_status", payload)
+
+
+def handle_ui_tree(args):
+    payload = {}
+    for key in ("interactive_only", "max_nodes", "all_windows"):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    resp = gateway_post("ui_tree", payload, timeout=15.0)
+    if resp.get("ok"):
+        return resp
+    # Optional Shizuku uiautomator fallback when Accessibility is not yet enabled
+    xml_out = _try_quick_rish(
+        "uiautomator dump /data/local/tmp/agy_uidump.xml >/dev/null 2>&1 && cat /data/local/tmp/agy_uidump.xml",
+        timeout_sec=6,
+    )
+    if xml_out and "<hierarchy" in xml_out:
+        return {
+            "ok": True,
+            "via": "shizuku_uiautomator_xml",
+            "xml": _truncate_text(xml_out),
+        }
+    return resp
+
+
+def handle_ui_act(args):
+    action = str(args.get("action") or "").strip()
+    if not action:
+        return {"ok": False, "error": "action is required"}
+    payload = {"action": action}
+    for key in (
+        "target_text", "desc", "view_id", "node_index", "exact",
+        "interactive_only", "all_windows", "text", "submit",
+        "x", "y", "x1", "y1", "x2", "y2", "duration_ms",
+    ):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    resp = gateway_post("ui_action", payload, timeout=15.0)
+    if resp.get("ok"):
+        return resp
+    # Optional Shizuku input fallback for coordinate/global actions
+    fallback_cmd = None
+    if action == "tap" and "x" in args and "y" in args:
+        fallback_cmd = f"input tap {int(float(args['x']))} {int(float(args['y']))}"
+    elif action == "swipe" and all(k in args for k in ("x1", "y1", "x2", "y2")):
+        dur = int(args.get("duration_ms", 280))
+        fallback_cmd = (
+            f"input swipe {int(float(args['x1']))} {int(float(args['y1']))} "
+            f"{int(float(args['x2']))} {int(float(args['y2']))} {dur}"
+        )
+    elif action == "back":
+        fallback_cmd = "input keyevent 4"
+    elif action == "home":
+        fallback_cmd = "input keyevent 3"
+    elif action == "recents":
+        fallback_cmd = "input keyevent 187"
+    if fallback_cmd and _try_quick_rish(fallback_cmd, timeout_sec=5) is not None:
+        return {"ok": True, "action": action, "via": "shizuku_input_fallback"}
+    return resp
+
+
+def handle_screenshot(args):
+    payload = {}
+    if args.get("path"):
+        payload["path"] = str(args["path"])
+    resp = gateway_post("ui_screenshot", payload, timeout=15.0)
+    if resp.get("ok"):
+        return resp
+    out_path = str(args.get("path") or os.path.join(get_home(), "logs", f"screen_{int(time.time())}.png"))
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    rish_bin = _find_rish_bin()
+    if os.path.isfile(rish_bin):
+        try:
+            with open(out_path, "wb") as f:
+                proc = subprocess.run([rish_bin, "-c", "screencap -p"], stdout=f, stderr=subprocess.PIPE, timeout=6)
+            if proc.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 100:
+                return {"ok": True, "path": out_path, "via": "shizuku_screencap_fallback"}
+        except Exception:
+            pass
+    return resp
+
+
+def handle_apps(args):
+    action = str(args.get("action") or "").strip()
+    if action == "list":
+        payload = {}
+        for key in ("query", "include_system", "limit"):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("apps_list", payload, timeout=15.0)
+    if action == "launch":
+        payload = {}
+        for key in ("package", "query"):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("app_launch", payload, timeout=10.0)
+    return {"ok": False, "error": f"unsupported apps action: {action}"}
+
+
+def handle_intent(args):
+    if args.get("setting"):
+        return gateway_post("open_settings", {"setting": str(args["setting"])}, timeout=10.0)
+    payload = {}
+    for key in ("action", "uri", "mime_type", "package", "component", "category", "extras"):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    return gateway_post("send_intent", payload, timeout=10.0)
+
+
+def handle_notifications(args):
+    action = str(args.get("action") or "").strip()
+    if action == "list":
+        payload = {}
+        for key in ("package", "include_ongoing", "limit"):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("notifications_list", payload, timeout=10.0)
+    if action in ("open", "dismiss", "dismiss_all", "trigger_action", "reply"):
+        payload = {"action": action}
+        for key in ("key", "action_index", "reply_text"):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("notification_action", payload, timeout=10.0)
+    return {"ok": False, "error": f"unsupported notifications action: {action}"}
+
+
 TOOL_HANDLERS = {
     "android_device_info": handle_device_info,
     "android_notify": handle_notify,
@@ -1003,6 +1475,13 @@ TOOL_HANDLERS = {
     "android_shizuku_exec": handle_shizuku_exec,
     "android_browser_automate": handle_browser_automate,
     "android_schedule_task": handle_schedule_task,
+    "android_agent_status": handle_agent_status,
+    "android_ui_tree": handle_ui_tree,
+    "android_ui_act": handle_ui_act,
+    "android_screenshot": handle_screenshot,
+    "android_apps": handle_apps,
+    "android_intent": handle_intent,
+    "android_notifications": handle_notifications,
 }
 
 

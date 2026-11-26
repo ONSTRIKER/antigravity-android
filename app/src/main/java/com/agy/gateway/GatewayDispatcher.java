@@ -23,6 +23,7 @@ public final class GatewayDispatcher {
     private final LogRingBuffer logBuffer;
     private final com.agy.log.CommandHistory commandHistory;
     private final ExecHandler execHandler;
+    private final PhoneAgentHandler phoneAgentHandler;
 
     public GatewayDispatcher(Context context, LogRingBuffer logBuffer) {
         this.appContext = context.getApplicationContext();
@@ -35,6 +36,7 @@ public final class GatewayDispatcher {
         this.logBuffer = logBuffer;
         this.commandHistory = new com.agy.log.CommandHistory();
         this.execHandler = new ExecHandler(context, this.commandHistory, logBuffer);
+        this.phoneAgentHandler = new PhoneAgentHandler(context);
     }
 
     public JSONObject dispatch(String command, JSONObject payload) {
@@ -68,6 +70,26 @@ public final class GatewayDispatcher {
                 return deviceHandler.handleToast(payload);
             case "torch":
                 return deviceHandler.handleTorch(payload);
+            case "ui_status":
+                return phoneAgentHandler.handleStatus(payload);
+            case "ui_tree":
+                return phoneAgentHandler.handleUiTree(payload);
+            case "ui_action":
+                return phoneAgentHandler.handleUiAction(payload);
+            case "ui_screenshot":
+                return phoneAgentHandler.handleUiScreenshot(payload);
+            case "notifications_list":
+                return phoneAgentHandler.handleNotificationsList(payload);
+            case "notification_action":
+                return phoneAgentHandler.handleNotificationAction(payload);
+            case "apps_list":
+                return phoneAgentHandler.handleAppsList(payload);
+            case "app_launch":
+                return phoneAgentHandler.handleAppLaunch(payload);
+            case "send_intent":
+                return phoneAgentHandler.handleSendIntent(payload);
+            case "open_settings":
+                return phoneAgentHandler.handleOpenSettings(payload);
             case "logs":
                 JSONObject logsResp = new JSONObject();
                 try {

@@ -1,4 +1,4 @@
-# Antigravity for Android v2.6.0
+# Antigravity for Android v2.7.0
 
 ## Спецификация пакетов релиза
 
@@ -7,6 +7,21 @@
 | **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с оригинальными проверками Google (чистая версия без модификаций кода аутентификации). |
 | **`antigravity-region-bypass.apk`** | `com.agy` | 45157 | Редакция с обходом проверки учетных записей (позволяет авторизоваться под аккаунтами, блокируемыми со стороны Google; требует наличия сетевого туннеля/VPN). |
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
+
+---
+
+## Изменения и исправления (v2.7.0)
+
+* **Нативный автономный Android Phone Agent (`AgyAccessibilityService`, `AgyNotificationListenerService`, `PhoneAgentHandler`):**
+  * Добавлен постоянный системный сервис доступности `AgyAccessibilityService` (`@xml/accessibility_service_config`), обеспечивающий мгновенное чтение семантического дерева UI любых приложений (`ui_tree`), клики по тексту/описанию/`view_id`, ввод текста с отправкой IME Enter, скролл, мультитач-жесты (`tap`, `long_press`, `swipe`), глобальные системные действия (`back`, `home`, `recents`, `notifications`, `quick_settings`, `split_screen`, `lock_screen`) и захват PNG-скриншотов через API Android 11+ (`takeScreenshot` + `HardwareBuffer`) без зависимости от ADB/Shizuku после перезагрузки устройства.
+  * Добавлен сервис `AgyNotificationListenerService` для чтения активных уведомлений любых приложений, открытия `contentIntent`, очистки уведомлений, нажатия кнопок действий и отправки мгновенных inline-ответов (`RemoteInput` для SMS, мессенджеров и почты).
+  * Добавлен `PhoneAgentHandler` в `SystemGatewayServer` (`ui_status`, `ui_tree`, `ui_action`, `ui_screenshot`, `notifications_list`, `notification_action`, `apps_list`, `app_launch`, `send_intent`, `open_settings`) и разрешения `QUERY_ALL_PACKAGES`, `SYSTEM_ALERT_WINDOW`, `REQUEST_INSTALL_PACKAGES` в `AndroidManifest.xml`.
+* **Расширение MCP-сервера `android-device` до 20 инструментов и скилл `android-phone-agent`:**
+  * В `agy-mcp-android` (`v1.1.0`) добавлены 7 новых инструментов: `android_agent_status`, `android_ui_tree`, `android_ui_act`, `android_screenshot`, `android_apps`, `android_intent` и `android_notifications` (с автоматическим резервным переключением на Shizuku `uiautomator`/`input`/`screencap`, если Accessibility еще не включен).
+  * Добавлен встроенный скилл `android-phone-agent` (`Perceive -> Act -> Verify`) в `modules/core/seed/skills/` и `env/overlay/etc/antigravity/skills/`.
+* **Надежные Bionic Python MCP-мосты и разрешение симлинков `pkg`:**
+  * В `ShellBridgeInstaller` (`BRIDGE_FORMAT = 6`) мосты `runtime/bin/agy-mcp-android` и `runtime/bin/agy-mcp-browser` переведены на прямой вызов `"$PREFIX/bin/python3" "$PREFIX/bin/agy-mcp-*"`, а в `EnvInstaller` гарантирована установка бита исполнения на `$PREFIX/bin` при каждом старте.
+  * В `env/pkg/pkg` добавлено разрешение `readlink -f "$0"` и резервный путь `$PREFIX/libexec/pkg/lib` для корректного вызова `pkg` через симлинк или обертку.
 
 ---
 

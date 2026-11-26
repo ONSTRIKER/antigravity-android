@@ -35,7 +35,7 @@ public final class ShellBridgeInstaller {
     /** Records which prefix the bulk bridges were generated for. Bump when the
      *  bridge script format changes so a warm launch regenerates them once. */
     private static final String BRIDGE_MARKER = ".agy-bridges";
-    private static final int BRIDGE_FORMAT = 5;
+    private static final int BRIDGE_FORMAT = 6;
 
     private ShellBridgeInstaller() {
     }
@@ -449,10 +449,49 @@ public final class ShellBridgeInstaller {
      * and across in-place upgrades without inheriting incompatible {@code LD_*} vars.
      */
     private static void writeMcpAndPythonBridges(File bin, File prefix, File filesDir, String appId) {
-        writeExecBridge(new File(bin, "agy-mcp-android"), prefix, filesDir, "agy-mcp-android", null, appId);
-        writeExecBridge(new File(bin, "agy-mcp-browser"), prefix, filesDir, "agy-mcp-browser", null, appId);
+        writePythonScriptBridge(new File(bin, "agy-mcp-android"), prefix, filesDir, "agy-mcp-android", appId);
+        writePythonScriptBridge(new File(bin, "agy-mcp-browser"), prefix, filesDir, "agy-mcp-browser", appId);
         writeExecBridge(new File(bin, "python3"), prefix, filesDir, "python3", null, appId);
         writeExecBridge(new File(bin, "python"), prefix, filesDir, "python", "python3", appId);
+    }
+
+    private static void writePythonScriptBridge(File bridge, File prefix, File filesDir,
+                                                String scriptName, String appId) {
+        String p = ShellQuote.quote(prefix.getAbsolutePath());
+        String homeDir = ShellQuote.quote(filesDir.getAbsolutePath());
+        String pkgName = ShellQuote.quote(appId != null ? appId : "com.agy");
+        StringBuilder sb = new StringBuilder();
+        sb.append("#!/system/bin/sh\n");
+        sb.append("# AGY Bionic Python MCP bridge -> $PREFIX/bin/").append(scriptName).append('\n');
+        sb.append("PREFIX=").append(p).append('\n');
+        sb.append("HOME_DIR=").append(homeDir).append('\n');
+        sb.append("AGY_APPLICATION_ID=").append(pkgName).append('\n');
+        sb.append("export PREFIX AGY_APPLICATION_ID\n");
+        sb.append("if [ -z \"$HOME\" ]; then export HOME=\"$HOME_DIR\"; fi\n");
+        sb.append("if [ -z \"$TMPDIR\" ]; then export TMPDIR=\"$PREFIX/tmp\"; fi\n");
+        sb.append("mkdir -p \"$TMPDIR\" 2>/dev/null || true\n");
+        sb.append("if [ -f \"$PREFIX/lib/libtermux-exec.so\" ]; then\n");
+        sb.append("  export LD_PRELOAD=\"$PREFIX/lib/libtermux-exec.so\"\n");
+        sb.append("else\n");
+        sb.append("  unset LD_PRELOAD\n");
+        sb.append("fi\n");
+        sb.append("export LD_LIBRARY_PATH=\"$PREFIX/lib\"\n");
+        sb.append("export PATH=\"$PREFIX/bin:$HOME_DIR/runtime/bin:/system/bin\"\n");
+        sb.append("export OPENSSL_CONF=\"$PREFIX/etc/tls/openssl.cnf\"\n");
+        sb.append("export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export LANG=\"C.UTF-8\"\n");
+        sb.append("WAIT=0\n");
+        sb.append("while { [ ! -x \"$PREFIX/bin/python3\" ] || [ ! -f \"$PREFIX/bin/").append(scriptName).append("\" ]; } && [ \"$WAIT\" -lt 10 ]; do\n");
+        sb.append("  sleep 1\n");
+        sb.append("  WAIT=$((WAIT + 1))\n");
+        sb.append("done\n");
+        sb.append("if [ -x \"$PREFIX/bin/python3\" ] && [ -f \"$PREFIX/bin/").append(scriptName).append("\" ]; then\n");
+        sb.append("  exec \"$PREFIX/bin/python3\" \"$PREFIX/bin/").append(scriptName).append("\" \"$@\"\n");
+        sb.append("fi\n");
+        sb.append("echo \"agy mcp bridge: $PREFIX/bin/").append(scriptName).append(" or python3 not found\" >&2\n");
+        sb.append("exit 127\n");
+        writeScript(bridge, sb.toString());
     }
 
     private static void writeExecBridge(File bridge, File prefix, File filesDir,

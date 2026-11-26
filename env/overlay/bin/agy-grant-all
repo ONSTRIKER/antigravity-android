@@ -1,0 +1,45 @@
+#!/system/bin/sh
+# agy-grant-all - One-shot Shizuku (rish) helper to grant standard Android
+# runtime permissions, special AppOps, and Doze exemption to Antigravity.
+set -eu
+
+PREFIX_DIR="${PREFIX:-$(cd "$(dirname "$0")/.." && pwd)}"
+PKG="${AGY_APPLICATION_ID:-com.agy}"
+RISH_BIN="${AGY_RISH_BIN:-$PREFIX_DIR/bin/rish}"
+
+if [ ! -x "$RISH_BIN" ]; then
+  echo "error: rish not found at $RISH_BIN" >&2
+  exit 1
+fi
+
+if ! "$RISH_BIN" -c "id" >/dev/null 2>&1; then
+  echo "Shizuku service is not active right now." >&2
+  echo "Start Shizuku (via Wireless Debugging) and re-run: agy-grant-all" >&2
+  exit 1
+fi
+
+echo "Applying Android permissions and AppOps grants for $PKG via Shizuku..."
+
+for perm in \
+  android.permission.POST_NOTIFICATIONS \
+  android.permission.CAMERA \
+  android.permission.RECORD_AUDIO \
+  android.permission.READ_EXTERNAL_STORAGE \
+  android.permission.WRITE_EXTERNAL_STORAGE; do
+  "$RISH_BIN" -c "pm grant $PKG $perm" >/dev/null 2>&1 || true
+done
+
+for op in \
+  MANAGE_EXTERNAL_STORAGE \
+  SYSTEM_ALERT_WINDOW \
+  REQUEST_INSTALL_PACKAGES \
+  WRITE_SETTINGS; do
+  "$RISH_BIN" -c "appops set $PKG $op allow" >/dev/null 2>&1 || true
+done
+
+"$RISH_BIN" -c "dumpsys deviceidle whitelist +$PKG" >/dev/null 2>&1 || true
+"$RISH_BIN" -c "cmd appops set $PKG RUN_IN_BACKGROUND allow" >/dev/null 2>&1 || true
+"$RISH_BIN" -c "cmd appops set $PKG RUN_ANY_IN_BACKGROUND allow" >/dev/null 2>&1 || true
+
+echo "Granted runtime permissions, AppOps (All Files, Overlays, Install Packages), and unrestricted background battery for $PKG."
+echo "Note: Toggle Accessibility and Notification Access once in Android Settings (or ask Antigravity to open them)."

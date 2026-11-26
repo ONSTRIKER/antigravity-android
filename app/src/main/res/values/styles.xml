@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="accessibility_service_description">Allows Antigravity AI to inspect UI elements, perform taps/gestures, and capture screenshots across apps to complete agentic tasks on your behalf.</string>
     <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
         <item name="android:colorBackground">@color/window_background</item>

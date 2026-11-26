@@ -154,6 +154,93 @@ class _MockGatewayHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "closed": True})
             else:
                 self._send_json({"ok": True, "action": action})
+        elif cmd == "ui_status":
+            self._send_json({
+                "ok": True,
+                "package": "com.agy",
+                "sdk_int": 35,
+                "accessibility_connected": True,
+                "accessibility_enabled": True,
+                "active_package": "com.android.settings",
+                "notification_listener_connected": True,
+                "notification_listener_enabled": True,
+                "battery_unrestricted": True,
+                "all_files_access": True,
+                "can_draw_overlays": True,
+                "can_request_package_installs": True,
+            })
+        elif cmd == "ui_tree":
+            self._send_json({
+                "ok": True,
+                "active_package": "com.android.settings",
+                "node_count": 2,
+                "nodes": [
+                    {"index": 0, "text": "Connections", "clickable": True, "center": [540, 420]},
+                    {"index": 1, "text": "Search settings", "editable": True, "center": [540, 220]},
+                ],
+            })
+        elif cmd == "ui_action":
+            self._send_json({
+                "ok": True,
+                "action": payload.get("action"),
+                "via": "accessibility",
+            })
+        elif cmd == "ui_screenshot":
+            self._send_json({
+                "ok": True,
+                "path": payload.get("path") or "/tmp/screen_1.png",
+                "width": 1080,
+                "height": 2520,
+                "via": "accessibility_api30",
+            })
+        elif cmd == "apps_list":
+            self._send_json({
+                "ok": True,
+                "count": 2,
+                "apps": [
+                    {"package": "com.android.chrome", "label": "Chrome", "system": True},
+                    {"package": "com.android.settings", "label": "Settings", "system": True},
+                ],
+            })
+        elif cmd == "app_launch":
+            self._send_json({
+                "ok": True,
+                "package": payload.get("package") or "com.android.settings",
+                "label": "Settings",
+            })
+        elif cmd == "send_intent":
+            self._send_json({
+                "ok": True,
+                "action": payload.get("action", "android.intent.action.VIEW"),
+                "uri": payload.get("uri", ""),
+            })
+        elif cmd == "open_settings":
+            self._send_json({
+                "ok": True,
+                "setting": payload.get("setting"),
+                "intent_action": "android.settings.ACCESSIBILITY_SETTINGS",
+            })
+        elif cmd == "notifications_list":
+            self._send_json({
+                "ok": True,
+                "via": "notification_listener",
+                "count": 1,
+                "notifications": [
+                    {
+                        "key": "0|com.google.android.apps.messaging|1|null|101",
+                        "package": "com.google.android.apps.messaging",
+                        "title": "Alex",
+                        "text": "Are you free at 3?",
+                        "actions": [{"index": 0, "title": "Reply", "has_reply_input": True}],
+                    }
+                ],
+            })
+        elif cmd == "notification_action":
+            self._send_json({
+                "ok": True,
+                "action": payload.get("action"),
+                "key": payload.get("key", ""),
+            })
         else:
             self._send_json({"ok": False, "error": f"unknown command: {cmd}"})
 
@@ -187,9 +274,10 @@ class TestMcpAndroidServer(unittest.TestCase):
             with open(self.mock_rish, "w", encoding="utf-8") as f:
                 f.write("@echo off\r\necho MOCK_RISH_OK %*\r\n")
         else:
+            sh_bin = shutil.which("sh") or "/bin/sh"
             self.mock_rish = os.path.join(self.prefix_dir, "bin", "mock_rish.sh")
             with open(self.mock_rish, "w", encoding="utf-8") as f:
-                f.write("#!/bin/sh\necho \"MOCK_RISH_OK $*\"\n")
+                f.write(f"#!{sh_bin}\necho \"MOCK_RISH_OK $*\"\n")
             os.chmod(self.mock_rish, 0o755)
 
         env = os.environ.copy()
@@ -290,8 +378,16 @@ class TestMcpAndroidServer(unittest.TestCase):
             "android_shizuku_exec",
             "android_browser_automate",
             "android_schedule_task",
+            "android_agent_status",
+            "android_ui_tree",
+            "android_ui_act",
+            "android_screenshot",
+            "android_apps",
+            "android_intent",
+            "android_notifications",
         }
         self.assertEqual(names, expected_tools)
+        self.assertEqual(len(tools), 20)
         for t in tools:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertIn("properties", t["inputSchema"])
@@ -451,6 +547,51 @@ class TestMcpAndroidServer(unittest.TestCase):
         self.assertFalse(is_err)
         self.assertEqual(rm_res["status"], "success")
 
+        # 12. Native Phone Agent tools (status, ui_tree, ui_act, screenshot, apps, intent, notifications)
+        st_res, is_err = self._call_tool(20, "android_agent_status")
+        self.assertFalse(is_err)
+        self.assertTrue(st_res["accessibility_connected"])
+        self.assertTrue(st_res["notification_listener_connected"])
+
+        tree_res, is_err = self._call_tool(21, "android_ui_tree", {"interactive_only": True, "max_nodes": 100})
+        self.assertFalse(is_err)
+        self.assertEqual(tree_res["node_count"], 2)
+
+        act_res, is_err = self._call_tool(22, "android_ui_act", {
+            "action": "click",
+            "target_text": "Connections",
+        })
+        self.assertFalse(is_err)
+        self.assertEqual(act_res["action"], "click")
+
+        scr_res, is_err = self._call_tool(23, "android_screenshot", {"path": "/tmp/fold_screen.png"})
+        self.assertFalse(is_err)
+        self.assertEqual(scr_res["path"], "/tmp/fold_screen.png")
+
+        apps_res, is_err = self._call_tool(24, "android_apps", {"action": "list", "query": "Set"})
+        self.assertFalse(is_err)
+        self.assertEqual(apps_res["count"], 2)
+
+        launch_res, is_err = self._call_tool(25, "android_apps", {"action": "launch", "query": "Settings"})
+        self.assertFalse(is_err)
+        self.assertEqual(launch_res["package"], "com.android.settings")
+
+        intent_res, is_err = self._call_tool(26, "android_intent", {"setting": "accessibility"})
+        self.assertFalse(is_err)
+        self.assertEqual(intent_res["setting"], "accessibility")
+
+        nlist_res, is_err = self._call_tool(27, "android_notifications", {"action": "list"})
+        self.assertFalse(is_err)
+        self.assertEqual(nlist_res["count"], 1)
+
+        nreply_res, is_err = self._call_tool(28, "android_notifications", {
+            "action": "reply",
+            "key": "0|com.google.android.apps.messaging|1|null|101",
+            "reply_text": "Yes, 3 PM works!",
+        })
+        self.assertFalse(is_err)
+        self.assertEqual(nreply_res["action"], "reply")
+
     def test_error_handling(self):
         # Unknown method
         err_resp = self._rpc({"jsonrpc": "2.0", "id": 100, "method": "nonexistent/method"})
@@ -484,7 +625,7 @@ class TestPackSeedSkills(unittest.TestCase):
         try:
             copied = pack_seed.pack_seed(src_seed, tmp_out)
             self.assertIn("AGENTS.md", copied)
-            for skill in ("android-device", "android-browser", "android-daemon"):
+            for skill in ("android-device", "android-browser", "android-daemon", "android-phone-agent"):
                 rel = f"skills/{skill}/SKILL.md"
                 self.assertIn(rel, copied)
                 full = os.path.join(tmp_out, "skills", skill, "SKILL.md")

@@ -59,6 +59,7 @@ Antigravity automatically seeds two zero-dependency stdio MCP servers into `$HOM
 2. **`android-device` (`$HOME/runtime/bin/agy-mcp-android` -> `$PREFIX/bin/agy-mcp-android`)**:
    - Communicates with `SystemGatewayServer` (`127.0.0.1:<port>`, port in `$HOME/logs/gateway.port`, default `45160`), Shizuku (`rish`), and `agy-daemon`:
 
+- **Cross-App Phone Agent (`AgyAccessibilityService` & `AgyNotificationListenerService`):** `android_agent_status` (checks Accessibility/Notification/Storage/Battery permissions and opens Android Settings pages), `android_ui_tree` (live semantic UI tree across apps), `android_ui_act` (semantic `click`/`set_text`/`scroll` + coordinate `tap`/`swipe` + global `back`/`home`/`recents`/`notifications`/`quick_settings`/`split_screen`), `android_screenshot` (fast Android 11+ Accessibility PNG capture), `android_apps` (`list`/`launch` installed apps by label or package), `android_intent` (deep links, `tel:`, `geo:`, intents & system settings), and `android_notifications` (`list`, `open`, `dismiss`, `trigger_action`, and inline `RemoteInput` `reply` to messages).
 - **Device & Feedback:** `android_device_info` (battery, charging, network, memory, storage), `android_toast`, `android_vibrate`, `android_torch`.
 - **Clipboard:** `android_clipboard_get`, `android_clipboard_set`.
 - **Notifications, Interactive Approvals & Subagent Progress:** `android_notify` (supports progress bars, `agy_tasks`/`agy_alerts`/`agy_subagents` channels, and `approval: true` preset with **Approve**, **Deny**, and **Deny w/ Comment** inline `RemoteInput` reply), `android_wait_approval` (returns `decision` + inline `comment`), and `android_subagent_notify` (low-buzz progress notifications with one-tap **Cancel** wired to ConnectRPC `CancelCascadeInvocation`).
@@ -68,7 +69,8 @@ Antigravity automatically seeds two zero-dependency stdio MCP servers into `$HOM
 - **Autonomous Scheduling:** `android_schedule_task` (`add`, `list`, `pause`, `resume`, `remove`, `run_now`, `status` on `agy-daemon`).
 
 ### Bundled Skills
-Three curated skills are automatically seeded into `$HOME/.gemini/config/skills/` (and mirrored in `$PREFIX/etc/antigravity/skills/`):
+Four curated skills are automatically seeded into `$HOME/.gemini/config/skills/` (and mirrored in `$PREFIX/etc/antigravity/skills/`):
+- **`android-phone-agent`**: Cross-app Android UI automation (`Perceive -> Act -> Verify` via `android_ui_tree`, `android_ui_act`, `android_screenshot`, `android_apps`, `android_intent`, `android_notifications`).
 - **`android-device`**: Device telemetry, clipboard, interactive Approve/Reject notifications, torch/haptics, Shizuku `rish` workflows, and `SystemGatewayServer`.
 - **`android-browser`**: Headless mobile browser automation (`android_browser_automate`) for scraping, UI verification, screenshots, and localhost live preview.
 - **`android-daemon`**: Autonomous background AI task scheduling, watchers, and ConnectRPC execution.
