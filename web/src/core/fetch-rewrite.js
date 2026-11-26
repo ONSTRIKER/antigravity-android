@@ -1,20 +1,9 @@
 /**
- * core/fetch-rewrite.js - file:// WebView -> core origin fetch rewrite.
- *
- * The WebView loads from file:///android_asset/web/, so main.js builds its
- * transport from window.location.origin ("file://") and the Connect/grpc-web
- * transport then fetches e.g.
- *   file://exa.language_server_pb.languageserverservice/Method
- * which the WebView rejects: URL scheme "file" is not supported.
- *
- * Rewrite file:// or relative ConnectRPC URLs onto the core origin, preserving
- * method/headers/body and attaching the CSRF token. Idempotent and a no-op for
- * non-RPC / already-absolute http(s) URLs.
- *
- * The original periodic HEAD ping is not ported (it referenced an undefined
- * helper; see docs/DEADCODE.md).
+ * core/fetch-rewrite.js - loopback core origin fetch rewrite, cold-boot retry,
+ * /voice/health retry, and ConnectRPC streaming recovery wrapper.
  */
-var RPC_MARKERS = ['exa.language_server_pb.', 'exa.host_bridge_pb.', '/exa.'];
+var RPC_MARKERS = ['exa.language_server_pb.', 'exa.host_bridge_pb.', '/exa.', '/jetski.'];
+var bootStartTs = Date.now();
 
 function isVoiceHealthUrl(url) {
   if (!url) return false;
@@ -47,16 +36,37 @@ function rpcPathFrom(url) {
   return s.slice(best).replace(/^\/+/, '') || null;
 }
 
+function computeStartupRetries(isStream) {
+  if (isStream) return 10;
+  // Avoid duplicating non-idempotent unary POST RPCs once startup has settled.
+  if (global.__AG_UI_READY__ || (Date.now() - bootStartTs) > 20000) {
+    return 0;
+  }
+  return 25;
+}
+
 function installFetchRewrite() {
   if (global.__AG_FETCH_REWRITE__ || typeof global.fetch !== 'function') return;
   var origFetch = global.fetch.bind(global);
 
-  function fetchWithStartupRetry(u, opts, retries) {
-    return origFetch(u, opts).catch(function (err) {
+  function isAborted(err, opts) {
+    if (opts && opts.signal && opts.signal.aborted) return true;
+    if (!err) return false;
+    return err.name === 'AbortError' || (typeof err.message === 'string' && err.message.indexOf('aborted') !== -1);
+  }
+
+  function fetchWithStartupRetry(u, opts, retries, isStream) {
+    var doCall = isStream
+      ? function () { return wrapStreamingFetch(origFetch, u, opts); }
+      : function () { return origFetch(u, opts); };
+    return doCall().catch(function (err) {
+      if (isAborted(err, opts)) {
+        throw err;
+      }
       if (retries > 0) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
-            resolve(fetchWithStartupRetry(u, opts, retries - 1));
+          origSetTimeout(function () {
+            resolve(fetchWithStartupRetry(u, opts, retries - 1, isStream));
           }, 120);
         });
       }
@@ -64,22 +74,22 @@ function installFetchRewrite() {
     });
   }
 
-  // pYa() in main.js does not retry /voice/health on network errors during cold boot;
-  // retry transient failures so the white Live Voice Call icon appears reliably.
+  // Retry /voice/health on transient errors during cold boot so the Live Voice
+  // Call icon appears reliably.
   function fetchVoiceHealthWithRetry(u, opts, retries) {
     return origFetch(u, opts).then(function (resp) {
       if (retries > 0 && resp && (resp.status === 502 || resp.status === 503 || resp.status === 504)) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
+          origSetTimeout(function () {
             resolve(fetchVoiceHealthWithRetry(u, opts, retries - 1));
           }, 300);
         });
       }
       return resp;
     }, function (err) {
-      if (retries > 0) {
+      if (retries > 0 && !isAborted(err, opts)) {
         return new Promise(function (resolve) {
-          setTimeout(function () {
+          origSetTimeout(function () {
             resolve(fetchVoiceHealthWithRetry(u, opts, retries - 1));
           }, 300);
         });
@@ -101,6 +111,7 @@ function installFetchRewrite() {
             var targetUrl = appendCsrfQuery(coreBase() + '/' + rpath);
             var reqMethod = resource.method || (init && init.method) || 'POST';
             var reqHeaders = new Headers(resource.headers || (init && init.headers) || {});
+            var reqSignal = (init && init.signal) || resource.signal || undefined;
             ensureCsrf(reqHeaders);
 
             var bodyPromise;
@@ -116,16 +127,21 @@ function installFetchRewrite() {
               }
             }
 
+            var reqIsStream = isStreamingRpc(rpath);
             return bodyPromise.then(function (bodyData) {
               var nextOpts = {
                 method: reqMethod,
                 headers: reqHeaders,
                 body: bodyData,
-                credentials: 'omit'
+                credentials: 'omit',
+                signal: reqSignal
               };
-              return fetchWithStartupRetry(targetUrl, nextOpts, 30);
+              return fetchWithStartupRetry(targetUrl, nextOpts, computeStartupRetries(reqIsStream), reqIsStream);
             });
           } catch (e) { warn('fetch rewrite (Request)', e); }
+        }
+        if (isLoopbackRpcUrl(resource.url)) {
+          return wrapStreamingFetch(origFetch, resource, init);
         }
         return origFetch(resource, init);
       }
@@ -151,7 +167,11 @@ function installFetchRewrite() {
           }
           next.headers = headers;
 
-          return fetchWithStartupRetry(url, next, 30);
+          var strIsStream = isStreamingRpc(path);
+          return fetchWithStartupRetry(url, next, computeStartupRetries(strIsStream), strIsStream);
+        }
+        if (isLoopbackRpcUrl(resource)) {
+          return wrapStreamingFetch(origFetch, resource, init);
         }
       }
     } catch (e) { warn('fetch rewrite', e); }

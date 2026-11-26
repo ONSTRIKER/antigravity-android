@@ -101,7 +101,9 @@ graph TD
   4. Скрытие сплэша происходит только по сигналу первого рендера из JavaScript (`window.Android.onUiReady()`), исключая мерцание белого экрана.
 - **`LocalAssetServer`**:
   - Перехватывает вызовы `shouldInterceptRequest` в `AgyWebViewClient` для Same-Origin адреса `https://127.0.0.1:<port>/*`.
-  - Статические файлы (`files/web/*`) отдаются напрямую из локального кэша приложения в памяти, не нагружая Go-сервер ядра. RPC и веб-сокеты (`/exa.*`, `/jetski.*`, streaming) прозрачно пропускаются к ядру.
+  - Статические файлы (`files/web/*`) отдаются напрямую из локального хранилища приложения с заголовком `Cache-Control: no-store, no-cache, must-revalidate` (исключая залипание старых JS/CSS после обновления APK поверх), не нагружая Go-сервер ядра. RPC и веб-сокеты (`/exa.*`, `/jetski.*`, streaming) прозрачно пропускаются к ядру.
+- **Поддержка складных экранов (Foldables / Galaxy Z Fold Cover & Inner Displays)**:
+  - В `AndroidManifest.xml` включены `android:resizeableActivity="true"`, `android.max_aspect=3.0` и `android.supports_size_changes=true`, а `MainActivity.onConfigurationChanged` выполняет синхронизацию `requestLayout()` и CSS-переменных `--agy-vvh`/`--agy-vvw` при переключении между внешним и внутренним экранами без перезапуска сессии.
 - **`AppHtmlInjector`**:
   - Внедряет в `<head>` веб-бандла строгую директиву Content-Security-Policy (CSP).
   - Инициализирует глобальные объекты `window.__APP_CONFIG__`, `window.__AG_ENDPOINTS__`, `window.__AG_CSRF__` и одноразовый криптографический токен `blobBridgeToken`.
@@ -117,14 +119,14 @@ graph TD
 
 | Команда | Обработчик | Описание |
 | :--- | :--- | :--- |
-| `notify` | `NotificationHandler` | Публикация, обновление прогресса и отмена Android-уведомлений в каналах `agy_tasks` и `agy_alerts`. |
+| `notify` | `NotificationHandler` | Публикация, обновление прогресса и отмена кликабельных Android-уведомлений (`PendingIntent` -> `MainActivity`) в каналах `agy_tasks`, `agy_alerts` и `agy_subagents`. |
 | `open_url` | `BrowserHandler` | Открытие внешних ссылок и системных документов через `UriDispatcher`. |
 | `wakelock` | `PowerHandler` | Захват и освобождение именованных частичных WakeLock'ов для длительных скриптов. |
 | `clipboard` / `clipboard_set` | `ClipboardHandler` | Асинхронное чтение и запись в системный буфер обмена на UI-потоке. |
 | `system_info` | `DeviceHandler` | Сбор телеметрии: уровень заряда батареи, статус зарядки, тип сети, свободная память и диск. |
 | `vibrate` | `DeviceHandler` | Тактильный отклик (Haptic Feedback) заданной длительности. |
 | `toast` | `DeviceHandler` | Отображение нативных всплывающих сообщений (Toast). |
-| `exec` | `ExecHandler` | Выполнение команд в шелле (`/system/bin/sh` или повышенный `rish` через Shizuku) с таймаутом и захватом потоков. |
+| `exec` | `ExecHandler` | Выполнение команд в шелле (`/system/bin/sh` или повышенный `rish` через Shizuku) с лимитом вывода `256 КБ`, закрытием `stdin`, принудительным `destroyForcibly()` по таймауту и захватом потоков. |
 | `/gateway/status` | `SystemGatewayServer` | Проверка состояния шлюза (health check). |
 | `/gateway/logs` | `SystemGatewayServer` | Чтение последних строк системного лога из кольцевого буфера памяти. |
 | `/gateway/commands` | `SystemGatewayServer` | История выполненных шлюзом команд и их статусов. |

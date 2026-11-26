@@ -1,9 +1,11 @@
 #!/data/user/0/com.agy/files/usr/bin/bash
-# agy-notify - Post and manage Android notifications.
+# agy-notify - Post and manage clickable, Antigravity-branded Android notifications.
 set -e
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 PREFIX="${PREFIX:-$(cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+APP_HOME="$(dirname "$PREFIX")"
+GW_PORT_FILE="$APP_HOME/logs/gateway.port"
 RISH_BIN="$PREFIX/bin/rish"
 
 USAGE="Usage: agy-notify [post|cancel|list] [options]
@@ -62,6 +64,42 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+json_escape() {
+    printf '%s' "$1" | awk '
+        BEGIN { ORS="" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            if (NR > 1) printf "\\n"
+            printf "%s", $0
+        }
+    '
+}
+
+tag_to_id() {
+    local csum
+    csum="$(printf '%s' "$1" | cksum 2>/dev/null | awk '{print $1}')"
+    printf '%d' "$(( 40000 + (${csum:-0} % 50000) ))"
+}
+
+gateway_call() {
+    [ -z "${AGY_NOTIFY_CAPTURE:-}" ] || return 1
+    [ -f "$GW_PORT_FILE" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    local gw_port resp
+    gw_port="$(tr -d ' \r\n' < "$GW_PORT_FILE" 2>/dev/null || true)"
+    [ -n "$gw_port" ] || return 1
+    resp="$(curl -fsS --max-time 2 -X POST "http://127.0.0.1:${gw_port}/gateway" \
+        -H "Content-Type: application/json" \
+        -d "$1" 2>/dev/null)" || return 1
+    case "$resp" in
+        *'"ok":true'*|*'"ok": true'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ "$CMD" = "post" ]; then
     if [ -z "$MESSAGE" ] && [ -n "$TITLE" ]; then
         MESSAGE="$TITLE"
@@ -73,8 +111,13 @@ if [ "$CMD" = "post" ]; then
         BODY_TEXT="[$SUBTITLE] $MESSAGE"
     fi
 
+    NID="$(tag_to_id "$TAG")"
+    PAYLOAD="{\"command\":\"notify\",\"payload\":{\"action\":\"post\",\"title\":\"$(json_escape "$TITLE")\",\"message\":\"$(json_escape "$BODY_TEXT")\",\"tag\":\"$(json_escape "$TAG")\",\"id\":$NID}}"
+    if gateway_call "$PAYLOAD"; then
+        exit 0
+    fi
+
     if [ -x "$RISH_BIN" ]; then
-        # Optional high-resolution logo cache with safe fallback to system default icon.
         LOGO_CACHE="/data/local/tmp/agy_logo.png"
         SRC_LOGO=""
         for candidate in "${AGY_LOGO:-}" "$PREFIX/share/antigravity/logo.png" "$PREFIX/share/pixmaps/antigravity.png"; do
@@ -101,6 +144,9 @@ if [ "$CMD" = "post" ]; then
     echo "[agy-notify] notification queued: $TITLE - $MESSAGE"
 
 elif [ "$CMD" = "cancel" ]; then
+    NID="$(tag_to_id "$TAG")"
+    PAYLOAD="{\"command\":\"notify\",\"payload\":{\"action\":\"cancel\",\"tag\":\"$(json_escape "$TAG")\",\"id\":$NID}}"
+    gateway_call "$PAYLOAD" || true
     if [ -x "$RISH_BIN" ]; then
         "$RISH_BIN" -c "cmd notification cancel $(printf %q "$TAG")" 2>/dev/null || true
     fi

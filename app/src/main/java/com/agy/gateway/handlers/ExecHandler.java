@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 public final class ExecHandler {
 
     private static final String TAG = "ExecHandler";
+    private static final int MAX_STREAM_CHARS = 256 * 1024;
+    private static final String TRUNCATED_SUFFIX = "\n...[output truncated at 256 KB]";
     private final Context context;
     private final CommandHistory history;
     private final LogRingBuffer logBuffer;
@@ -86,10 +88,18 @@ public final class ExecHandler {
             pb.environment().remove("LD_LIBRARY_PATH");
 
             Process proc = pb.start();
+            try {
+                if (proc.getOutputStream() != null) {
+                    proc.getOutputStream().close();
+                }
+            } catch (Exception ignored) {
+            }
 
             // Read stdout and stderr in background threads to avoid buffer deadlocks
             Thread outThread = new Thread(() -> drainStream(proc.getInputStream(), stdoutBuf), "StdoutDrain");
             Thread errThread = new Thread(() -> drainStream(proc.getErrorStream(), stderrBuf), "StderrDrain");
+            outThread.setDaemon(true);
+            errThread.setDaemon(true);
             outThread.start();
             errThread.start();
 
@@ -101,6 +111,28 @@ public final class ExecHandler {
                 status = (exitCode == 0) ? "SUCCESS" : "FAILED";
             } else {
                 proc.destroy();
+                try {
+                    if (!proc.waitFor(150, TimeUnit.MILLISECONDS)) {
+                        proc.destroyForcibly();
+                    }
+                } catch (Exception ignored) {
+                    try {
+                        proc.destroyForcibly();
+                    } catch (Exception ignored2) {
+                    }
+                }
+                try {
+                    if (proc.getInputStream() != null) proc.getInputStream().close();
+                } catch (Exception ignored) {
+                }
+                try {
+                    if (proc.getErrorStream() != null) proc.getErrorStream().close();
+                } catch (Exception ignored) {
+                }
+                outThread.interrupt();
+                errThread.interrupt();
+                outThread.join(300);
+                errThread.join(300);
                 status = "TIMEOUT";
                 stderrBuf.append("\n[Process timed out after ").append(timeoutMs).append("ms]");
             }
@@ -138,13 +170,25 @@ public final class ExecHandler {
     }
 
     private static void drainStream(InputStream in, StringBuilder out) {
+        boolean truncated = false;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (out.length() > 0) {
-                    out.append("\n");
+            char[] buf = new char[4096];
+            int n;
+            while ((n = reader.read(buf)) != -1) {
+                if (!truncated) {
+                    int remaining = MAX_STREAM_CHARS - out.length();
+                    if (remaining > 0) {
+                        int toAppend = Math.min(n, remaining);
+                        out.append(buf, 0, toAppend);
+                        if (toAppend < n) {
+                            out.append(TRUNCATED_SUFFIX);
+                            truncated = true;
+                        }
+                    } else {
+                        out.append(TRUNCATED_SUFFIX);
+                        truncated = true;
+                    }
                 }
-                out.append(line);
             }
         } catch (Exception ignored) {}
     }

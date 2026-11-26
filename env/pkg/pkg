@@ -78,21 +78,37 @@ install_one() {
         rewrite_prefix "$PREFIX"
         printf '' | db_put "$name" "$ver" "$arch"
     fi
-    # Auto-generate runtime bridge only for newly installed binaries in this package
+    # Auto-symlink OpenJDK binaries (lib/jvm/java-*-openjdk/bin/*) into $PREFIX/bin
+    # and auto-generate runtime bridges for newly installed binaries in this package.
     local runtime_bin="$PREFIX/../runtime/bin"
-    if [ -d "$runtime_bin" ] && [ -n "$pkg_files" ]; then
+    if [ -n "$pkg_files" ]; then
         local p bname bin_file
         while IFS= read -r p; do
+            bname=""
             case "$p" in
                 bin/*)
                     bname="${p#bin/}"
                     case "$bname" in
                         */*|"") continue ;;
                     esac
-                    bin_file="$PREFIX/bin/$bname"
-                    [ -f "$bin_file" ] || [ -L "$bin_file" ] || continue
-                    if [ ! -f "$runtime_bin/$bname" ]; then
-                        cat > "$runtime_bin/$bname" <<EOF
+                    ;;
+                lib/jvm/java-*-openjdk/bin/*)
+                    bname="${p##*/}"
+                    [ -n "$bname" ] || continue
+                    if [ -f "$PREFIX/$p" ] && [ -x "$PREFIX/$p" ] \
+                        && [ ! -e "$PREFIX/bin/$bname" ] && [ ! -L "$PREFIX/bin/$bname" ]; then
+                        mkdir -p "$PREFIX/bin"
+                        ln -snf "../$p" "$PREFIX/bin/$bname" 2>/dev/null || true
+                    fi
+                    ;;
+                *)
+                    continue
+                    ;;
+            esac
+            bin_file="$PREFIX/bin/$bname"
+            [ -f "$bin_file" ] || [ -L "$bin_file" ] || continue
+            if [ -d "$runtime_bin" ] && [ ! -f "$runtime_bin/$bname" ]; then
+                cat > "$runtime_bin/$bname" <<EOF
 #!/system/bin/sh
 PREFIX='$PREFIX'
 export PREFIX
@@ -107,13 +123,41 @@ export OPENSSL_CONF="\$PREFIX/etc/tls/openssl.cnf"
 export SSL_CERT_FILE="\$PREFIX/etc/tls/cert.pem"
 exec "\$PREFIX/bin/$bname" "\$@"
 EOF
-                        chmod 755 "$runtime_bin/$bname" 2>/dev/null || true
-                    fi
-                    ;;
-            esac
+                chmod 755 "$runtime_bin/$bname" 2>/dev/null || true
+            fi
         done <<< "$pkg_files"
     fi
     printf 'Setting up %s (%s) ...\n' "$name" "$ver"
+}
+
+prefetch_debs() {
+    local max_jobs=4 running=0 idx=0 pids=() fail=0 name entry base line fn sz sha url cache pid
+    for name in "$@"; do
+        entry="$(index_lookup "$name")"
+        [ -n "$entry" ] || continue
+        base="${entry%%	*}"; line="${entry#*	}"
+        fn="$(printf '%s' "$line" | cut -f9)"
+        sz="$(printf '%s' "$line" | cut -f10)"
+        sha="$(printf '%s' "$line" | cut -f11)"
+        [ -n "$fn" ] || continue
+        url="$(cat "$PKG_INDEX/$base.url")/$fn"
+        cache="$PKG_CACHE/$(basename "$fn")"
+        idx=$((idx + 1))
+        ( fetch "$url" "$sha" "$cache" "$sz" "$idx" ) &
+        pids+=("$!")
+        running=$((running + 1))
+        if [ "$running" -ge "$max_jobs" ]; then
+            for pid in "${pids[@]}"; do
+                wait "$pid" || fail=1
+            done
+            pids=()
+            running=0
+        fi
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || fail=1
+    done
+    return "$fail"
 }
 
 cmd_install() {
@@ -189,6 +233,10 @@ EOF
         printf 'Need to get %s of archives.\n' "$(human_size "$total_bytes")"
     fi
 
+    if [ "${#new_pkgs[@]}" -gt 1 ]; then
+        prefetch_debs "${new_pkgs[@]}" || die "package download failed"
+    fi
+
     local fetch_idx=0
     while IFS= read -r n; do
         [ -n "$n" ] || continue
@@ -228,6 +276,9 @@ cmd_upgrade() {
     fi
     printf 'The following packages will be upgraded:\n'
     printf '  %s\n' "${to_upgrade[*]}"
+    if [ "${#to_upgrade[@]}" -gt 1 ]; then
+        prefetch_debs "${to_upgrade[@]}" || die "package download failed"
+    fi
     local idx=0
     for name in "${to_upgrade[@]}"; do
         idx=$((idx + 1))
@@ -256,19 +307,22 @@ cmd_remove() {
         esac
     done
     [ "${#pkgs[@]}" -ge 1 ] || die "remove: need package name(s)"
-    local name p dir
+    local name p dir files_list
     for name in "${pkgs[@]}"; do
         if ! db_exists "$name"; then warn "Package '$name' is not installed, so not removed"; continue; fi
         printf 'Removing %s (%s) ...\n' "$name" "$(db_get "$name" version)"
-        db_files "$name" | while IFS= read -r p; do
-            [ -n "$p" ] || continue
-            rm -f "$PREFIX/$p"
-            dir="$(dirname "$p")"
-            while [ "$dir" != "." ] && [ -n "$dir" ]; do
-                rmdir "$PREFIX/$dir" 2>/dev/null || break
-                dir="$(dirname "$dir")"
-            done
-        done
+        files_list="$(db_files "$name")"
+        if [ -f "$files_list" ]; then
+            while IFS= read -r p || [ -n "$p" ]; do
+                [ -n "$p" ] || continue
+                rm -f "$PREFIX/$p"
+                dir="$(dirname "$p")"
+                while [ "$dir" != "." ] && [ -n "$dir" ]; do
+                    rmdir "$PREFIX/$dir" 2>/dev/null || break
+                    dir="$(dirname "$dir")"
+                done
+            done < "$files_list"
+        fi
         db_remove "$name"
     done
 }

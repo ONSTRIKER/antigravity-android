@@ -72,7 +72,9 @@ public final class WebSettingsFactory {
             defaultUserAgent = settings.getUserAgentString();
         }
         settings.setUserAgentString(desktop ? DESKTOP_UA : defaultUserAgent);
-        settings.setUseWideViewPort(desktop);
-        settings.setLoadWithOverviewMode(desktop);
+        // Always render at crisp 1:1 native dp width across foldable inner/cover
+        // screens instead of overview-zooming a synthetic wide viewport.
+        settings.setUseWideViewPort(false);
+        settings.setLoadWithOverviewMode(false);
     }
 }

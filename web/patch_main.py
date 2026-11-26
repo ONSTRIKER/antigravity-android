@@ -2,11 +2,19 @@
 """
 web/patch_main.py - Dynamic, resilient patcher for web/generated/main.js.
 
-Locates the Appearance settings block and injects the Desktop Mode toggle
-if not already present. Safe, idempotent, and graceful when upstream changes:
-if minified signatures shift, it warns and leaves main.js untouched so the
-build still succeeds (web/generated/patches/mobile_bridge.js provides the
-resilient Quick Controls fallback).
+Applies Android host compatibility & foldable responsive layout patches:
+1. Disables unsupported desktop bubblewrap/seccomp terminal sandbox presets.
+2. Switches sidebarComponent layout from fixed desktop split ("SIDEBAR") to
+   "RESPONSIVE" so narrow/foldable cover screens (< 768px) open a full-width
+   slide-over drawer instead of squashing the split-pane to ~75px, while
+   unfolded screens (>= 768px) keep the docked desktop split-pane.
+3. Switches auxPaneComponent location to "responsive" so narrow screens (< 640px)
+   open the side panel as a 95%-width slide-over popover instead of crushing chat.
+4. Clamps persisted sidebarWidth to [256, 456] so previously squashed widths
+   stored in localStorage/storageService heal automatically.
+5. Injects the Desktop Mode toggle into Appearance settings when matched.
+
+Safe, idempotent, and graceful when upstream signatures shift.
 """
 
 import os
@@ -76,29 +84,94 @@ def _verify_js_syntax(js_path):
     return True, "node --check ok"
 
 
+def _apply_structural_fixes(content):
+    """Apply resilient Android sandbox & foldable responsive sidebar patches."""
+    changed = []
+
+    next_c = content.replace("enableTerminalSandbox:!0", "enableTerminalSandbox:!1")
+    if next_c != content:
+        content = next_c
+        changed.append("sandbox=off")
+
+    sidebar_src = 'sidebarComponent:{feature:{layout:"SIDEBAR"'
+    sidebar_dst = 'sidebarComponent:{feature:{layout:"RESPONSIVE"'
+    if sidebar_src in content:
+        content = content.replace(sidebar_src, sidebar_dst, 1)
+        changed.append("sidebar=RESPONSIVE")
+
+    aux_src = 'auxPaneComponent:{feature:{location:"sidebar",'
+    aux_dst = 'auxPaneComponent:{feature:{location:"responsive",closeSidePanelPopoverOnNavigation:!0,'
+    if aux_src in content:
+        content = content.replace(aux_src, aux_dst, 1)
+        changed.append("auxPane=responsive")
+
+    sw_re = re.compile(
+        r'("sidebarWidth",'
+        + IDENT_RE
+        + r"=>String\("
+        + IDENT_RE
+        + r"\),("
+        + IDENT_RE
+        + r")=>\{\2=Number\(\2\);return isNaN\(\2\)\?256:)(\2)(\})"
+    )
+    sw_match = sw_re.search(content)
+    if sw_match:
+        v = sw_match.group(2)
+        repl = f"{sw_match.group(1)}({v}<240?256:{v}>456?456:{v}){sw_match.group(4)}"
+        content = content[: sw_match.start()] + repl + content[sw_match.end() :]
+        changed.append("sidebarWidth=clamped")
+
+    return content, changed
+
+
+def _write_verified(file_path, patched_content):
+    target_dir = os.path.dirname(os.path.abspath(file_path))
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix=".patch_main_", suffix=".js", dir=target_dir)
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_f:
+            tmp_f.write(patched_content)
+
+        ok, msg = _verify_js_syntax(tmp_path)
+        if not ok:
+            print(
+                f"[web-patch] WARNING: patched main.js failed syntax check ({msg}); "
+                "keeping unpatched copy (mobile_bridge.js provides resilient fallback controls).",
+                file=sys.stderr,
+            )
+            os.remove(tmp_path)
+            tmp_path = None
+            return False, msg
+
+        os.replace(tmp_path, file_path)
+        tmp_path = None
+        return True, msg
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
 def patch_main(file_path):
     if not os.path.isfile(file_path):
         print(f"[web-patch] file not found: {file_path}", file=sys.stderr)
         return False
 
     with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+        orig_content = f.read()
 
-    # Android does not support desktop bubblewrap/seccomp re-exec sandboxing
-    # (re-execing /proc/self/exe hits glibc libloader.so with EINVAL). Disable
-    # enableTerminalSandbox on presets so Default and Auto run natively.
-    sandbox_patched = content.replace("enableTerminalSandbox:!0", "enableTerminalSandbox:!1")
+    content, structural_changes = _apply_structural_fixes(orig_content)
 
-    if "Desktop Mode" in sandbox_patched or "ag_desktop_mode" in sandbox_patched:
-        if sandbox_patched != content:
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(sandbox_patched)
-            print("[web-patch] Disabled unsupported desktop enableTerminalSandbox in main.js")
+    if "Desktop Mode" in content or "ag_desktop_mode" in content:
+        if content != orig_content:
+            wrote, msg = _write_verified(file_path, content)
+            if wrote:
+                print(f"[web-patch] Applied structural fixes ({', '.join(structural_changes)}; {msg})")
         else:
-            print("[web-patch] Desktop Mode toggle and sandbox fix already present in main.js")
+            print("[web-patch] Desktop Mode toggle and structural fixes already present in main.js")
         return True
-
-    content = sandbox_patched
 
     # 1. JSX Theme element injection: find Theme element in Appearance
     theme_idx = content.find('{label:"Theme"')
@@ -116,8 +189,6 @@ def patch_main(file_path):
             react_id = theme_match.group(1)
 
     # 2. State hook anchor in Appearance component:
-    # Prefer anchoring right before `return <react_id>.createElement(...{title:"Appearance"}`
-    # (works across v2.11.0 and v2.34.0+); fallback to legacy var ...!==3,...!==2 pattern.
     hook_anchor = None
     if react_id and theme_idx != -1:
         app_window_start = max(0, theme_idx - 400)
@@ -156,11 +227,13 @@ def patch_main(file_path):
     )
 
     if not hook_anchor or not theme_match or not react_id or not item_comp or not switch_comp:
+        if content != orig_content:
+            _write_verified(file_path, content)
         print(
-            "[web-patch] WARNING: upstream main.js signatures not matched "
+            "[web-patch] WARNING: upstream main.js Appearance signatures not matched "
             f"(hook={bool(hook_anchor)}, theme={bool(theme_match)}, "
             f"item={item_comp}, switch={switch_comp}); "
-            "leaving main.js unpatched (mobile_bridge.js provides resilient fallback controls).",
+            "mobile_bridge.js provides resilient fallback controls.",
             file=sys.stderr,
         )
         return True
@@ -181,44 +254,20 @@ def patch_main(file_path):
     orig_theme = theme_match.group(0)
     injected_theme = (
         orig_theme
-        + f',{react_id}.createElement({item_comp},{{label:"Desktop Mode",description:"Use desktop viewport and user agent for the workspace",'
+        + f',{react_id}.createElement({item_comp},{{label:"Desktop Mode",description:"Use desktop workspace layout and user agent",'
         + f"rightElement:{react_id}.createElement({switch_comp},{{checked:isDesktop,onCheckedChange:onDesktopToggle}})}})"
     )
 
     patched = content.replace(hook_anchor, injected_hook, 1)
     patched = patched.replace(orig_theme, injected_theme, 1)
 
-    target_dir = os.path.dirname(os.path.abspath(file_path))
-    tmp_path = None
-    try:
-        fd, tmp_path = tempfile.mkstemp(prefix=".patch_main_", suffix=".js", dir=target_dir)
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp_f:
-            tmp_f.write(patched)
-
-        ok, msg = _verify_js_syntax(tmp_path)
-        if not ok:
-            print(
-                f"[web-patch] WARNING: patched main.js failed syntax check ({msg}); "
-                "keeping unpatched copy (mobile_bridge.js provides resilient fallback controls).",
-                file=sys.stderr,
-            )
-            os.remove(tmp_path)
-            tmp_path = None
-            return True
-
-        os.replace(tmp_path, file_path)
-        tmp_path = None
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-    print(
-        f"[web-patch] Successfully patched Desktop Mode toggle into main.js "
-        f"(react={react_id}, item={item_comp}, switch={switch_comp}; {msg})"
-    )
+    wrote, msg = _write_verified(file_path, patched)
+    if wrote:
+        extras = f"; {', '.join(structural_changes)}" if structural_changes else ""
+        print(
+            f"[web-patch] Successfully patched main.js "
+            f"(react={react_id}, item={item_comp}, switch={switch_comp}{extras}; {msg})"
+        )
     return True
 
 

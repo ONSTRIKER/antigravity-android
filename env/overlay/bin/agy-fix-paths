@@ -1,4 +1,4 @@
-#!/data/user/0/com.agy.dev/files/usr/bin/bash
+#!/data/user/0/com.agy/files/usr/bin/bash
 # agy-fix-paths [PATH...] -- rewrite hardcoded Android app prefixes to $PREFIX.
 set -uo pipefail
 
@@ -21,6 +21,7 @@ count=0
 # 1. Fix app-private prefixes
 while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
+    [ -L "$f" ] && continue
     tmp="$f.agyfix.$$"
     if sed -E "s@$PATTERN@$esc@g" "$f" > "$tmp" 2>/dev/null; then
         if cmp -s "$f" "$tmp"; then
@@ -39,8 +40,9 @@ done < <(grep -rIlZ -E -e "$PATTERN" -- "${targets[@]}" 2>/dev/null)
 # 2. Fix /usr/bin/env shebangs to $PREFIX/bin/
 while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
+    [ -L "$f" ] && continue
     tmp="$f.agyfix.$$"
-    if sed -E "1s@^#! */usr/bin/env[[:space:]]+([^[:space:]]+)@#!$esc/bin/\\1@" "$f" > "$tmp" 2>/dev/null; then
+    if sed -E "1s@^#! */usr/bin/env[[:space:]]+(-S[[:space:]]+)?([^[:space:]]+)@#!$esc/bin/\\2@" "$f" > "$tmp" 2>/dev/null; then
         if cmp -s "$f" "$tmp"; then
             rm -f "$tmp"
         else
@@ -65,5 +67,19 @@ while IFS= read -r -d '' f; do
         fi
     fi
 done < <(find "${targets[@]}" -type l -print0 2>/dev/null)
+
+# 4. Auto-symlink OpenJDK binaries ($PREFIX/lib/jvm/java-*-openjdk/bin/*) into $PREFIX/bin
+if [ -d "$PREFIX/lib/jvm" ] && [ -d "$PREFIX/bin" ]; then
+    for jbin in "$PREFIX"/lib/jvm/java-*-openjdk/bin/*; do
+        [ -f "$jbin" ] && [ -x "$jbin" ] || continue
+        jbname="$(basename "$jbin")"
+        if [ ! -e "$PREFIX/bin/$jbname" ] && [ ! -L "$PREFIX/bin/$jbname" ]; then
+            rel_jbin="${jbin#$PREFIX/}"
+            if ln -snf "../$rel_jbin" "$PREFIX/bin/$jbname" 2>/dev/null; then
+                count=$((count + 1))
+            fi
+        fi
+    done
+fi
 
 printf 'agy-fix-paths: rewrote %d file(s)/link(s) -> %s\n' "$count" "$PREFIX"

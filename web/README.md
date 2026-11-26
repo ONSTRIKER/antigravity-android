@@ -56,7 +56,7 @@ sequenceDiagram
 web/
 ├── build.sh                      # Баш-оркестратор сборщика фрагментов и патчера
 ├── src.manifest                  # Декларативный манифест сборки web/generated/**
-├── patch_main.py                 # Патчер upstream main.js (Desktop Mode + отключение enableTerminalSandbox на Android)
+├── patch_main.py                 # Патчер upstream main.js (Desktop Mode, RESPONSIVE сайдбар для Fold/узких экранов, отключение enableTerminalSandbox)
 ├── index.html                    # Корневой HTML-шаблон хоста приложения
 ├── main.js                       # Исходный (upstream) обфусцированный бандл React UI (~9.9 МБ)
 ├── jetbox.css                    # Стили специфичных контролов и терминала
@@ -108,8 +108,8 @@ web/
 |---|---|---|---|
 | **`boot/custom-elements-guard.js`** | IIFE | ~514 B | Предотвращает краш при повторной регистрации Custom Elements в overlay-бандлах. |
 | **`boot/theme-bootstrap.js`** | IIFE | ~1.3 KB | Мгновенно применяет `light`/`dark` до первого рендера, предотвращая мигание экрана. |
-| **`bridge.core.js`** | IIFE | ~12 KB | Полифилл `window.process`, конфигурация, CSRF, discovery эндпоинтов и перехватчик `fetch`. |
-| **`patches/web_optimizations.js`** | IIFE | ~2.2 KB | Ликвидация 300мс задержки тапа, фиксация высоты `--agy-vvh` при открытии IME, GPU-композитинг. |
+| **`bridge.core.js`** | IIFE | ~16 KB | Полифилл `window.process`, подавление ложного `offline`, авто-восстановление стримов при resume/fold, CSRF, discovery эндпоинтов и перехватчик `fetch`. |
+| **`patches/web_optimizations.js`** | IIFE | ~3.0 KB | Ликвидация 300мс задержки тапа, синхронизация `--agy-vvh`/`--agy-vvw` и полноширинного drawer-сайдбара на узких/внешних экранах Fold, GPU-композитинг. |
 | **`patches/touch_model_menu.js`** | IIFE | ~6.7 KB | Адаптация hover-меню выбора моделей Base UI под сенсорный ввод. |
 | **`patches/theme_sync.js`** | IIFE | ~4.7 KB | MutationObserver за классами `<html>`/`<body>` и передача смены темы в нативный Android. |
 | **`patches/startup_ready.js`** | IIFE | ~4.7 KB | Детектор первого полезного рендера DOM и перехватчик JS-ошибок для `AndroidBridge`. |

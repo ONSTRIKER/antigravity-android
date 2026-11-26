@@ -561,6 +561,40 @@ public class MainActivity extends Activity
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         refreshTheme();
+        syncFoldableViewport();
+    }
+
+    private void syncFoldableViewport() {
+        if (rootLayout != null) {
+            rootLayout.requestLayout();
+        }
+        final WebView wv = webViewHost != null ? webViewHost.getWebView() : null;
+        if (wv == null) {
+            return;
+        }
+        wv.requestLayout();
+        final String js = "(function(){try{"
+                + "if(window.scrollX||window.scrollY)window.scrollTo(0,0);"
+                + "var vv=window.visualViewport,de=document.documentElement;"
+                + "if(de){"
+                + "var h=(vv&&vv.height)?vv.height:window.innerHeight;"
+                + "var w=(vv&&vv.width)?vv.width:window.innerWidth;"
+                + "if(h>0)de.style.setProperty('--agy-vvh',Math.round(h)+'px');"
+                + "if(w>0)de.style.setProperty('--agy-vvw',Math.round(w)+'px');"
+                + "}"
+                + "window.dispatchEvent(new Event('resize'));"
+                + "window.dispatchEvent(new CustomEvent('agy:fold-layout'));"
+                + "}catch(e){}})();";
+        wv.evaluateJavascript(js, null);
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (activityResumed && webViewHost != null && webViewHost.getWebView() == wv) {
+                    wv.requestLayout();
+                    wv.evaluateJavascript(js, null);
+                }
+            }
+        }, 140);
     }
 
     @Override

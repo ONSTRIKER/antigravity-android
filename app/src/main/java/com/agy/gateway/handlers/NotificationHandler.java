@@ -261,6 +261,7 @@ public final class NotificationHandler {
             builder.setContentTitle(title)
                     .setContentText(message)
                     .setSmallIcon(icon)
+                    .setContentIntent(buildLaunchPendingIntent(tag, id))
                     .setOngoing(ongoing)
                     .setAutoCancel(!ongoing);
 
@@ -393,6 +394,19 @@ public final class NotificationHandler {
         } catch (Exception ignored) {
         }
         return actions;
+    }
+
+    private PendingIntent buildLaunchPendingIntent(String tag, int id) {
+        Intent launchIntent = new Intent(context, com.agy.ui.MainActivity.class);
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        int reqCode = ("launch:" + (tag != null ? tag : "") + ":" + id).hashCode();
+        return PendingIntent.getActivity(context, reqCode, launchIntent, flags);
     }
 
     private static String sanitizeTag(String raw) {
