@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/data/user/0/com.agy/files/usr/bin/python3
 """
 agy-mcp-android - Zero-dependency stdio MCP server exposing native Android device
 capabilities via SystemGatewayServer, Shizuku (rish), and agy-daemon.
@@ -7,6 +7,7 @@ Protocol: JSON-RPC 2.0 over newline-delimited stdin/stdout (MCP 2024-11-05+).
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -17,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 SERVER_NAME = "android-device"
-SERVER_VERSION = "1.2.0"
+SERVER_VERSION = "1.3.0"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_GATEWAY_PORT = 45160
@@ -726,6 +727,10 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Include system bars, split-screen windows, and dialogs in addition to the active window.",
                 },
+                "ocr_fallback": {
+                    "type": "boolean",
+                    "description": "Automatically run fast 50%-downscaled Tesseract OCR when Android 17 accessibilityDataSensitive hides dialog text (default true).",
+                },
             },
             "additionalProperties": False,
         },
@@ -834,6 +839,10 @@ TOOLS = [
                     "minimum": 40,
                     "maximum": 5000,
                     "description": "Gesture stroke duration in milliseconds (default 60 for tap, 280 for swipe, 650 for long_press).",
+                },
+                "via_shizuku": {
+                    "type": "boolean",
+                    "description": "Force hardware input injection via Shizuku rish (bypasses Android 17 accessibilityDataSensitive blocks).",
                 },
             },
             "required": ["action"],
@@ -1258,6 +1267,59 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "android_media",
+        "description": (
+            "Inspect and manage Android MediaStore photos, videos, albums/buckets, Trash, and "
+            "Gallery cloud-sync status (Google Photos / Samsung Gallery two-way sync trap check). "
+            "Supports safe cloud-verified local cleanup that preserves Screenshots and non-media files."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["buckets", "list", "sync_status", "clean_local", "empty_trash"],
+                    "description": "MediaStore operation to perform.",
+                },
+                "media_type": {
+                    "type": "string",
+                    "enum": ["all", "images", "video"],
+                    "description": "Filter by images, video, or all (default 'all').",
+                },
+                "bucket": {
+                    "type": "string",
+                    "description": "Optional bucket_display_name or relative_path filter (for action='list' or 'clean_local').",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional filename substring filter (for action='list').",
+                },
+                "sort": {
+                    "type": "string",
+                    "enum": ["newest", "size"],
+                    "description": "Sort order for action='list' (default 'newest').",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum items to return for action='list' (default 50).",
+                },
+                "keep_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Relative paths to preserve during clean_local (default ['DCIM/Screenshots/', 'Pictures/Screenshots/']).",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true to execute deletion in clean_local or empty_trash; otherwise runs as a read-only dry_run.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -1612,6 +1674,111 @@ def handle_agent_status(args):
     return gateway_post("ui_status", payload)
 
 
+SYSTEM_CHROME_PACKAGES = frozenset((
+    "com.android.systemui",
+    "com.samsung.android.app.cocktailbarservice",
+))
+
+
+def _ensure_tessdata_env():
+    env = os.environ.copy()
+    if not env.get("TESSDATA_PREFIX"):
+        cand = os.path.join(get_prefix(), "share", "tessdata")
+        if os.path.isdir(cand):
+            env["TESSDATA_PREFIX"] = cand
+            os.environ["TESSDATA_PREFIX"] = cand
+    return env
+
+
+def _ocr_screen_nodes(scale=0.5):
+    tess_bin = os.path.join(get_prefix(), "bin", "tesseract")
+    if not os.path.isfile(tess_bin):
+        return None
+    ss = handle_screenshot({})
+    if not ss.get("ok") or not ss.get("path") or not os.path.isfile(ss["path"]):
+        return None
+    src_path = ss["path"]
+    ocr_path = src_path
+    inv_scale = 1.0
+    tmp_scaled = os.path.join(os.environ.get("TMPDIR") or os.path.join(get_prefix(), "tmp"), f"agy_ocr_{os.getpid()}.png")
+    try:
+        from PIL import Image  # type: ignore
+        os.makedirs(os.path.dirname(tmp_scaled), exist_ok=True)
+        img = Image.open(src_path)
+        if 0.2 <= scale < 1.0 and img.width >= 720:
+            nw, nh = max(1, int(img.width * scale)), max(1, int(img.height * scale))
+            img.resize((nw, nh)).save(tmp_scaled)
+            ocr_path = tmp_scaled
+            inv_scale = 1.0 / scale
+    except Exception:
+        ocr_path = src_path
+        inv_scale = 1.0
+
+    try:
+        proc = subprocess.run(
+            [tess_bin, ocr_path, "stdout", "--psm", "6", "tsv"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            env=_ensure_tessdata_env(),
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            return None
+        lines_map = {}
+        line_order = []
+        for row in proc.stdout.splitlines()[1:]:
+            cols = row.split("\t")
+            if len(cols) < 12:
+                continue
+            word = cols[11].strip()
+            if not word:
+                continue
+            try:
+                conf = float(cols[10])
+                if conf < 20:
+                    continue
+                key = (int(cols[2]), int(cols[3]), int(cols[4]))
+                x = int(int(cols[6]) * inv_scale)
+                y = int(int(cols[7]) * inv_scale)
+                w = int(int(cols[8]) * inv_scale)
+                h = int(int(cols[9]) * inv_scale)
+            except ValueError:
+                continue
+            if key not in lines_map:
+                lines_map[key] = {"words": [word], "x1": x, "y1": y, "x2": x + w, "y2": y + h}
+                line_order.append(key)
+            else:
+                entry = lines_map[key]
+                entry["words"].append(word)
+                entry["x1"] = min(entry["x1"], x)
+                entry["y1"] = min(entry["y1"], y)
+                entry["x2"] = max(entry["x2"], x + w)
+                entry["y2"] = max(entry["y2"], y + h)
+
+        ocr_nodes = []
+        for idx, k in enumerate(line_order):
+            e = lines_map[k]
+            cx = (e["x1"] + e["x2"]) // 2
+            cy = (e["y1"] + e["y2"]) // 2
+            ocr_nodes.append({
+                "index": idx,
+                "text": " ".join(e["words"]),
+                "bounds": [e["x1"], e["y1"], e["x2"], e["y2"]],
+                "center": [cx, cy],
+                "clickable": True,
+                "ocr": True,
+            })
+        return {"nodes": ocr_nodes, "screenshot_path": src_path}
+    except Exception:
+        return None
+    finally:
+        if ocr_path == tmp_scaled and os.path.exists(tmp_scaled):
+            try:
+                os.remove(tmp_scaled)
+            except OSError:
+                pass
+
+
 def handle_ui_tree(args):
     payload = {}
     for key in ("interactive_only", "max_nodes", "all_windows"):
@@ -1619,6 +1786,19 @@ def handle_ui_tree(args):
             payload[key] = args[key]
     resp = gateway_post("ui_tree", payload, timeout=15.0)
     if resp.get("ok"):
+        ocr_fallback = args.get("ocr_fallback", True)
+        nodes = resp.get("nodes") or []
+        non_chrome = [
+            n for n in nodes
+            if (n.get("package") not in SYSTEM_CHROME_PACKAGES)
+            and (n.get("text") or n.get("desc") or n.get("view_id") or n.get("clickable"))
+        ]
+        if ocr_fallback and len(non_chrome) == 0 and os.environ.get("AGY_DISABLE_OCR_FALLBACK") != "1":
+            ocr_res = _ocr_screen_nodes(scale=0.5)
+            if ocr_res and ocr_res.get("nodes"):
+                resp["protected_dialog_ocr"] = True
+                resp["ocr_nodes"] = ocr_res["nodes"]
+                resp["screenshot_path"] = ocr_res["screenshot_path"]
         return resp
     # Optional Shizuku uiautomator fallback when Accessibility is not yet enabled
     xml_out = _try_quick_rish(
@@ -1634,10 +1814,38 @@ def handle_ui_tree(args):
     return resp
 
 
+def _shizuku_gesture_cmd(action, args):
+    if action == "tap" and "x" in args and "y" in args:
+        return f"input tap {int(float(args['x']))} {int(float(args['y']))}"
+    if action == "long_press" and "x" in args and "y" in args:
+        dur = int(args.get("duration_ms", 650))
+        x, y = int(float(args["x"])), int(float(args["y"]))
+        return f"input swipe {x} {y} {x} {y} {dur}"
+    if action == "swipe" and all(k in args for k in ("x1", "y1", "x2", "y2")):
+        dur = int(args.get("duration_ms", 280))
+        return (
+            f"input swipe {int(float(args['x1']))} {int(float(args['y1']))} "
+            f"{int(float(args['x2']))} {int(float(args['y2']))} {dur}"
+        )
+    if action == "back":
+        return "input keyevent 4"
+    if action == "home":
+        return "input keyevent 3"
+    if action == "recents":
+        return "input keyevent 187"
+    return None
+
+
 def handle_ui_act(args):
     action = str(args.get("action") or "").strip()
     if not action:
         return {"ok": False, "error": "action is required"}
+
+    if args.get("via_shizuku"):
+        direct_cmd = _shizuku_gesture_cmd(action, args)
+        if direct_cmd and _try_quick_rish(direct_cmd, timeout_sec=5) is not None:
+            return {"ok": True, "action": action, "via": "shizuku_direct"}
+
     payload = {"action": action}
     for key in (
         "target_text", "desc", "view_id", "node_index", "exact",
@@ -1649,22 +1857,30 @@ def handle_ui_act(args):
     resp = gateway_post("ui_action", payload, timeout=15.0)
     if resp.get("ok"):
         return resp
+
+    # Automatic OCR + Shizuku touch fallback for Android 17 accessibilityDataSensitive dialogs
+    needle = str(args.get("target_text") or args.get("desc") or "").strip()
+    if action == "click" and needle and os.environ.get("AGY_DISABLE_OCR_FALLBACK") != "1":
+        exact = bool(args.get("exact"))
+        ocr_res = _ocr_screen_nodes(scale=0.5)
+        if ocr_res and ocr_res.get("nodes"):
+            needle_low = needle.lower()
+            for onode in ocr_res["nodes"]:
+                txt_low = onode["text"].lower()
+                matched = (txt_low == needle_low) if exact else (needle_low in txt_low)
+                if matched:
+                    cx, cy = onode["center"]
+                    if _try_quick_rish(f"input tap {cx} {cy}", timeout_sec=5) is not None:
+                        return {
+                            "ok": True,
+                            "action": "click",
+                            "matched_text": onode["text"],
+                            "center": [cx, cy],
+                            "via": "shizuku_ocr_fallback",
+                        }
+
     # Optional Shizuku input fallback for coordinate/global actions
-    fallback_cmd = None
-    if action == "tap" and "x" in args and "y" in args:
-        fallback_cmd = f"input tap {int(float(args['x']))} {int(float(args['y']))}"
-    elif action == "swipe" and all(k in args for k in ("x1", "y1", "x2", "y2")):
-        dur = int(args.get("duration_ms", 280))
-        fallback_cmd = (
-            f"input swipe {int(float(args['x1']))} {int(float(args['y1']))} "
-            f"{int(float(args['x2']))} {int(float(args['y2']))} {dur}"
-        )
-    elif action == "back":
-        fallback_cmd = "input keyevent 4"
-    elif action == "home":
-        fallback_cmd = "input keyevent 3"
-    elif action == "recents":
-        fallback_cmd = "input keyevent 187"
+    fallback_cmd = _shizuku_gesture_cmd(action, args)
     if fallback_cmd and _try_quick_rish(fallback_cmd, timeout_sec=5) is not None:
         return {"ok": True, "action": action, "via": "shizuku_input_fallback"}
     return resp
@@ -1846,6 +2062,184 @@ def handle_memory(args):
     return {"ok": False, "error": f"unsupported memory action: {action}"}
 
 
+_MEDIA_ROW_RE = re.compile(
+    r"_id=(\d+),\s*_display_name=(.*?),\s*bucket_display_name=(.*?),\s*relative_path=(.*?),\s*_data=(.*?),\s*_size=(\d+|NULL),\s*date_modified=(\d+|NULL),\s*is_trashed=(\d+|NULL)"
+)
+
+
+def _query_mediastore_rows(mtypes=("images", "video")):
+    rows = []
+    for mtype in mtypes:
+        out = _try_quick_rish(
+            f"content query --uri content://media/external/{mtype}/media "
+            "--projection _id:_display_name:bucket_display_name:relative_path:_data:_size:date_modified:is_trashed",
+            timeout_sec=15,
+        )
+        if out is None:
+            return None
+        for line in out.splitlines():
+            if not line.startswith("Row:"):
+                continue
+            m = _MEDIA_ROW_RE.search(line)
+            if not m:
+                continue
+            mid, dname, bucket, rpath, fpath, sz, dmod, trashed = m.groups()
+            rows.append({
+                "media_type": mtype,
+                "id": int(mid),
+                "name": dname,
+                "bucket": bucket,
+                "relative_path": rpath,
+                "path": fpath,
+                "size_bytes": int(sz) if sz.isdigit() else 0,
+                "date_modified": int(dmod) if dmod.isdigit() else 0,
+                "is_trashed": trashed == "1",
+                "content_uri": f"content://media/external/{mtype}/media/{mid}",
+            })
+    return rows
+
+
+def handle_media(args):
+    action = str(args.get("action") or "").strip().lower()
+    mtype_arg = str(args.get("media_type") or "all").lower()
+    mtypes = ("images", "video") if mtype_arg == "all" else (mtype_arg,)
+
+    if action == "sync_status":
+        pkgs_out = _try_quick_rish("pm list packages com.google.android.apps.photos; pm list packages com.sec.android.gallery3d", timeout_sec=6) or ""
+        return {
+            "ok": True,
+            "google_photos_installed": "com.google.android.apps.photos" in pkgs_out,
+            "samsung_gallery_installed": "com.sec.android.gallery3d" in pkgs_out,
+            "safety_guidance": (
+                "Before deleting photos in Samsung Gallery UI, verify Gallery Settings -> 'Sync photos and videos' "
+                "is OFF; if ON, Samsung Gallery two-way sync deletes items from Google Photos cloud too. "
+                "Prefer android_media(action='clean_local') after verifying Google Photos 'Backup complete'."
+            ),
+        }
+
+    rows = _query_mediastore_rows(mtypes)
+    if rows is None:
+        return {"ok": False, "error": "MediaStore query requires Shizuku (rish) active on the device."}
+
+    if action == "buckets":
+        buckets = {}
+        trashed_count = 0
+        for r in rows:
+            if r["is_trashed"]:
+                trashed_count += 1
+                continue
+            key = (r["bucket"], r["relative_path"])
+            b = buckets.setdefault(key, {
+                "bucket": r["bucket"],
+                "relative_path": r["relative_path"],
+                "images": 0,
+                "videos": 0,
+                "total_files": 0,
+                "size_bytes": 0,
+            })
+            if r["media_type"] == "video":
+                b["videos"] += 1
+            else:
+                b["images"] += 1
+            b["total_files"] += 1
+            b["size_bytes"] += r["size_bytes"]
+        bucket_list = sorted(buckets.values(), key=lambda x: (-x["total_files"], x["relative_path"]))
+        for b in bucket_list:
+            b["size_mb"] = round(b["size_bytes"] / (1024 * 1024), 2)
+        total_bytes = sum(b["size_bytes"] for b in bucket_list)
+        return {
+            "ok": True,
+            "total_active_items": sum(b["total_files"] for b in bucket_list),
+            "total_size_mb": round(total_bytes / (1024 * 1024), 2),
+            "trashed_items": trashed_count,
+            "buckets": bucket_list,
+        }
+
+    if action == "list":
+        bucket_flt = str(args.get("bucket") or "").strip().lower()
+        query_flt = str(args.get("query") or "").strip().lower()
+        sort_by = str(args.get("sort") or "newest").lower()
+        limit = max(1, min(int(args.get("limit", 50)), 500))
+        filtered = [
+            r for r in rows
+            if not r["is_trashed"]
+            and (not bucket_flt or bucket_flt in r["bucket"].lower() or bucket_flt in r["relative_path"].lower())
+            and (not query_flt or query_flt in r["name"].lower())
+        ]
+        if sort_by == "size":
+            filtered.sort(key=lambda r: -r["size_bytes"])
+        else:
+            filtered.sort(key=lambda r: -r["date_modified"])
+        items = filtered[:limit]
+        for it in items:
+            it["size_mb"] = round(it["size_bytes"] / (1024 * 1024), 2)
+        return {"ok": True, "total_matched": len(filtered), "count": len(items), "items": items}
+
+    if action == "empty_trash":
+        trashed = [r for r in rows if r["is_trashed"]]
+        if not args.get("confirm"):
+            return {
+                "ok": True,
+                "dry_run": True,
+                "trashed_count": len(trashed),
+                "trashed_mb": round(sum(r["size_bytes"] for r in trashed) / (1024 * 1024), 2),
+                "hint": "Pass confirm=true to permanently delete trashed MediaStore items.",
+            }
+        for mtype in mtypes:
+            _try_quick_rish(f"content delete --uri content://media/external/{mtype}/media --where 'is_trashed=1'", timeout_sec=10)
+        return {"ok": True, "dry_run": False, "emptied_count": len(trashed)}
+
+    if action == "clean_local":
+        keep_paths = set(args.get("keep_paths") or ["DCIM/Screenshots/", "Pictures/Screenshots/"])
+        bucket_flt = str(args.get("bucket") or "").strip().lower()
+        to_delete = []
+        kept = 0
+        for r in rows:
+            if r["is_trashed"]:
+                continue
+            if r["relative_path"] in keep_paths:
+                kept += 1
+                continue
+            if bucket_flt and (bucket_flt not in r["bucket"].lower() and bucket_flt not in r["relative_path"].lower()):
+                kept += 1
+                continue
+            to_delete.append(r)
+
+        del_bytes = sum(r["size_bytes"] for r in to_delete)
+        if not args.get("confirm"):
+            return {
+                "ok": True,
+                "dry_run": True,
+                "would_delete_count": len(to_delete),
+                "would_delete_mb": round(del_bytes / (1024 * 1024), 2),
+                "kept_count": kept,
+                "keep_paths": sorted(keep_paths),
+                "hint": "Verify Google Photos reports 'Backup complete' first, then pass confirm=true after user consent.",
+            }
+
+        unlinked = 0
+        freed_bytes = 0
+        for r in to_delete:
+            if os.path.isfile(r["path"]):
+                try:
+                    os.remove(r["path"])
+                    unlinked += 1
+                    freed_bytes += r["size_bytes"]
+                except OSError:
+                    pass
+        _try_quick_rish("content call --uri content://media --method scan_volume --arg external_primary", timeout_sec=20)
+        return {
+            "ok": True,
+            "dry_run": False,
+            "deleted_count": unlinked,
+            "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+            "kept_count": kept,
+            "keep_paths": sorted(keep_paths),
+        }
+
+    return {"ok": False, "error": f"unsupported media action: {action}"}
+
+
 TOOL_HANDLERS = {
     "android_device_info": handle_device_info,
     "android_notify": handle_notify,
@@ -1873,6 +2267,7 @@ TOOL_HANDLERS = {
     "android_location": handle_location,
     "android_comms_history": handle_comms_history,
     "android_memory": handle_memory,
+    "android_media": handle_media,
 }
 
 

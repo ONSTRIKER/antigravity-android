@@ -71,10 +71,9 @@ graph TD
 
 Ядро системы (`language_server`) компилируется под Linux/Glibc и выполняется в окружении Android через кастомный загрузчик `libloader.so` с эмуляцией инструкций LSE (`liblse_compat.so`).
 
-- **`CoreServerService`**: 
-  - Запускается как `ForegroundService` с типом `dataSync` и иконкой в трее (`ForegroundNotification`).
-  - Удерживает CPU WakeLock (`WakeLockHolder`) с флагом `PARTIAL_WAKE_LOCK`, гарантируя непрерывную работу агента при выключенном экране.
-  - Управляет жизненным циклом супервизора ядра, HTTP Gateway и фонового демона `agy-daemon`.
+- **`CoreServerService` и `VoiceForegroundService`**: 
+  - `CoreServerService` запускается как `ForegroundService` с типом `dataSync` и иконкой в трее (`ForegroundNotification`), удерживая CPU WakeLock (`WakeLockHolder` с `PARTIAL_WAKE_LOCK`) для непрерывной работы агента при выключенном экране, и управляет жизненным циклом супервизора ядра, HTTP Gateway и фонового демона `agy-daemon`.
+  - `VoiceForegroundService` поддерживает фоновые голосовые сессии Live Voice Call и диктовку с `PARTIAL_WAKE_LOCK`, `WifiManager.WIFI_MODE_FULL_LOW_LATENCY` (`WifiLock`, предотвращающим обрывы gRPC-стрима энергосбережением Wi-Fi на Android 14–17) и мягким аудиофокусом.
 - **`CoreLauncher`**:
   - Управляет установкой фазы 1 (распаковка и верификация ядра) и запуском нативного процесса.
   - Содержит `killOrphanCoreProcesses()`: сканирует `/proc` и принудительно завершает (`SIGKILL`) любые зависшие orphan-процессы `language_server` от предыдущих сессий перед стартом, исключая ошибку `EADDRINUSE` (`listen: address already in use`) на фиксированных loopback-портах 45157/45158.

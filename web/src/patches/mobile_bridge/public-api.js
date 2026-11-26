@@ -34,6 +34,7 @@ function installMobileBridge() {
   state.dictating = isVoiceDictatingNative();
   installVoiceWebSocketHook();
   installMicTrackObserver();
+  installVoiceAutoReconnectObserver();
   installClipboardImageInterceptor();
   installFocusTracking();
   mountQuickControls();

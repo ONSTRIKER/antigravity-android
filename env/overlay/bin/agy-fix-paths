@@ -1,5 +1,5 @@
 #!/data/user/0/com.agy/files/usr/bin/bash
-# agy-fix-paths [PATH...] -- rewrite hardcoded Android app prefixes to $PREFIX.
+# agy-fix-paths [PATH...] -- rewrite hardcoded Android app prefixes & desktop shebangs.
 set -uo pipefail
 
 if [ -z "${PREFIX:-}" ]; then
@@ -7,12 +7,16 @@ if [ -z "${PREFIX:-}" ]; then
     PREFIX="$(cd -- "$_agy_script_dir/.." 2>/dev/null && pwd)"
     unset _agy_script_dir
 fi
+HOME_DIR="${HOME:-$(dirname "$PREFIX")}"
 PATTERN='/data/(data|user/[0-9]+)/[^/]*/files/usr'
 
 if [ "$#" -gt 0 ]; then
     targets=("$@")
 else
     targets=("$PREFIX")
+    if [ -d "$HOME_DIR/.gemini/config/plugins" ]; then
+        targets+=("$HOME_DIR/.gemini/config/plugins")
+    fi
 fi
 
 esc="$(printf '%s' "$PREFIX" | sed 's/[\\&@]/\\&/g')"
@@ -55,6 +59,25 @@ while IFS= read -r -d '' f; do
         rm -f "$tmp"
     fi
 done < <(grep -rIlZ -E -m 1 -e '^#! */usr/bin/env' -- "${targets[@]}" 2>/dev/null)
+
+# 2b. Fix #!/bin/sh shebangs to #!/system/bin/sh (Android Bionic lacks /bin/sh)
+while IFS= read -r -d '' f; do
+    [ -n "$f" ] || continue
+    [ -L "$f" ] && continue
+    tmp="$f.agyfix.$$"
+    if sed -E "1s@^#! */bin/sh([[:space:]]|\$)@#!/system/bin/sh\\1@" "$f" > "$tmp" 2>/dev/null; then
+        if cmp -s "$f" "$tmp"; then
+            rm -f "$tmp"
+        else
+            mode="$(stat -c '%a' "$f" 2>/dev/null)" || mode=""
+            [ -n "$mode" ] && chmod "$mode" "$tmp" 2>/dev/null
+            mv -f "$tmp" "$f"
+            count=$((count + 1))
+        fi
+    else
+        rm -f "$tmp"
+    fi
+done < <(grep -rIlZ -E -m 1 -e '^#! */bin/sh([[:space:]]|$)' -- "${targets[@]}" 2>/dev/null)
 
 # 3. Retarget symlinks pointing to hardcoded app-private prefixes
 while IFS= read -r -d '' f; do

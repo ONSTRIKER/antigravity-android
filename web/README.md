@@ -111,7 +111,8 @@ web/
 | **`bridge.core.js`** | IIFE | ~16 KB | Полифилл `window.process`, подавление ложного `offline`, авто-восстановление стримов при resume/fold, CSRF, discovery эндпоинтов и перехватчик `fetch`. |
 | **`patches/web_optimizations.js`** | IIFE | ~3.0 KB | Ликвидация 300мс задержки тапа, синхронизация `--agy-vvh`/`--agy-vvw` и полноширинного drawer-сайдбара на узких/внешних экранах Fold, GPU-композитинг. |
 | **`patches/touch_model_menu.js`** | IIFE | ~6.7 KB | Адаптация hover-меню выбора моделей Base UI под сенсорный ввод. |
-| **`patches/theme_sync.js`** | IIFE | ~4.7 KB | MutationObserver за классами `<html>`/`<body>` и передача смены темы в нативный Android. |
+| **`patches/theme_sync.js`** | IIFE | ~5.7 KB | MutationObserver за классами `<html>`/`<body>` и передача смены темы в нативный Android. |
+| **`patches/mobile_bridge.js`** | IIFE | ~80 KB | Quick Controls, Extra-Keys, Share Sheet, вставка изображений из буфера, интеграция `VoiceForegroundService` и авто-переподключение Live Voice при обрывах стрима (`Reconnect`). |
 | **`patches/startup_ready.js`** | IIFE | ~4.7 KB | Детектор первого полезного рендера DOM и перехватчик JS-ошибок для `AndroidBridge`. |
 | **`main.js`** | Raw + Patch | ~9.5 MB | Рабочий бандл React UI, пропатченный скриптом `patch_main.py`. |
 

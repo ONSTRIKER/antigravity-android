@@ -438,9 +438,10 @@ class TestMcpAndroidServer(unittest.TestCase):
             "android_location",
             "android_comms_history",
             "android_memory",
+            "android_media",
         }
         self.assertEqual(names, expected_tools)
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 27)
         for t in tools:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertIn("properties", t["inputSchema"])

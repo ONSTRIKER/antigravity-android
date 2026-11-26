@@ -1,0 +1,382 @@
+#!/data/user/0/com.agy/files/usr/bin/python3
+"""
+agy-mcp-github - Zero-secret native GitHub MCP server powered by the authenticated
+`gh` CLI on Android (zero tokens stored in mcp_config.json).
+
+Protocol: JSON-RPC 2.0 over newline-delimited stdin/stdout (MCP 2024-11-05+).
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+SERVER_NAME = "github"
+SERVER_VERSION = "1.0.0"
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+MAX_OUTPUT_BYTES = 64 * 1024
+
+
+def _get_prefix():
+    p = os.environ.get("PREFIX", "").strip()
+    return p if p else os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def _get_home():
+    h = os.environ.get("HOME", "").strip()
+    return h if h else os.path.dirname(_get_prefix())
+
+
+def _gh_bin():
+    cand = os.path.join(_get_prefix(), "bin", "gh")
+    return cand if os.path.isfile(cand) else "gh"
+
+
+def _truncate(text, limit=MAX_OUTPUT_BYTES):
+    raw = (text or "").encode("utf-8", errors="replace")
+    if len(raw) <= limit:
+        return text or ""
+    return raw[:limit].decode("utf-8", errors="ignore") + f"\n...[truncated {len(raw) - limit} bytes]"
+
+
+def _run_gh(cli_args, timeout_sec=30):
+    env = os.environ.copy()
+    env["HOME"] = _get_home()
+    env["PREFIX"] = _get_prefix()
+    try:
+        proc = subprocess.run(
+            [_gh_bin()] + cli_args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            env=env,
+        )
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            return {"ok": False, "exit_code": proc.returncode, "error": err or out or f"gh exited {proc.returncode}"}
+        if out:
+            try:
+                return {"ok": True, "data": json.loads(out)}
+            except json.JSONDecodeError:
+                return {"ok": True, "output": _truncate(out)}
+        return {"ok": True, "output": _truncate(err)}
+    except FileNotFoundError:
+        return {"ok": False, "error": "gh CLI is not installed (run `pkg install gh`)."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"gh timed out after {timeout_sec}s"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS = [
+    {
+        "name": "github_auth_status",
+        "description": "Check authenticated GitHub account and token scopes via `gh auth status`.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "github_repos",
+        "description": "List, inspect, or create GitHub repositories.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "view", "create"], "description": "Repository operation."},
+                "repo": {"type": "string", "description": "owner/repo (or repo name for create)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max repos for list (default 30)."},
+                "visibility": {"type": "string", "enum": ["public", "private"], "description": "Visibility for create."},
+                "description": {"type": "string", "description": "Description for create."},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_issues",
+        "description": "List, view, create, comment on, or close GitHub issues.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "view", "create", "comment", "close"]},
+                "repo": {"type": "string", "description": "Target owner/repo."},
+                "number": {"type": "integer", "description": "Issue number (for view, comment, close)."},
+                "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "Filter state for list."},
+                "title": {"type": "string", "description": "Issue title (for create)."},
+                "body": {"type": "string", "description": "Issue or comment body."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": ["action", "repo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_prs",
+        "description": "List, view, diff, check CI status, create, or merge GitHub Pull Requests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "view", "diff", "checks", "create", "merge"]},
+                "repo": {"type": "string", "description": "Target owner/repo."},
+                "number": {"type": "integer", "description": "PR number."},
+                "state": {"type": "string", "enum": ["open", "closed", "merged", "all"]},
+                "title": {"type": "string"},
+                "body": {"type": "string"},
+                "base": {"type": "string"},
+                "head": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": ["action", "repo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_runs",
+        "description": "Monitor GitHub Actions workflow runs, inspect failed step logs, or rerun workflows.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "view", "failed_logs", "rerun"]},
+                "repo": {"type": "string", "description": "Target owner/repo."},
+                "run_id": {"type": "string", "description": "Workflow run ID (for view, failed_logs, rerun)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["action", "repo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_releases",
+        "description": "List or inspect GitHub Releases and release assets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "view"]},
+                "repo": {"type": "string", "description": "Target owner/repo."},
+                "tag": {"type": "string", "description": "Release tag (optional for view; defaults to latest)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["action", "repo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_search",
+        "description": "Search GitHub repositories, code, issues, or pull requests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["repos", "code", "issues", "prs"]},
+                "query": {"type": "string", "description": "Search query string."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": ["kind", "query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "github_api",
+        "description": "Execute an authenticated GitHub REST or GraphQL API call via `gh api`.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "endpoint": {"type": "string", "description": "REST path (e.g. 'repos/OWNER/REPO/commits') or 'graphql'."},
+                "method": {"type": "string", "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"], "description": "HTTP method (default GET)."},
+                "jq": {"type": "string", "description": "Optional jq filter expression."},
+                "fields": {"type": "object", "description": "Optional key/value fields (-f key=val)."},
+            },
+            "required": ["endpoint"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def _dispatch_tool(name, args):
+    if name == "github_auth_status":
+        return _run_gh(["auth", "status"])
+
+    if name == "github_repos":
+        act = args.get("action")
+        if act == "list":
+            lim = str(int(args.get("limit", 30)))
+            cmd = ["repo", "list"]
+            if args.get("repo"):
+                cmd.append(str(args["repo"]))
+            cmd.extend(["--limit", lim, "--json", "nameWithOwner,description,isPrivate,updatedAt,stargazerCount,url"])
+            return _run_gh(cmd)
+        if act == "view":
+            repo = str(args.get("repo") or "").strip()
+            if not repo:
+                return {"ok": False, "error": "repo is required for view"}
+            return _run_gh(["repo", "view", repo, "--json", "nameWithOwner,description,defaultBranchRef,isPrivate,stargazerCount,forkCount,url,updatedAt"])
+        if act == "create":
+            repo = str(args.get("repo") or "").strip()
+            if not repo:
+                return {"ok": False, "error": "repo is required for create"}
+            vis = "--private" if args.get("visibility") == "private" else "--public"
+            cmd = ["repo", "create", repo, vis]
+            if args.get("description"):
+                cmd.extend(["--description", str(args["description"])])
+            return _run_gh(cmd)
+
+    if name == "github_issues":
+        act = args.get("action")
+        repo = str(args["repo"])
+        if act == "list":
+            state = str(args.get("state") or "open")
+            lim = str(int(args.get("limit", 25)))
+            return _run_gh(["issue", "list", "-R", repo, "--state", state, "--limit", lim, "--json", "number,title,state,author,labels,createdAt,url"])
+        if act == "view":
+            return _run_gh(["issue", "view", str(args["number"]), "-R", repo, "--json", "number,title,state,body,author,comments,labels,url"])
+        if act == "create":
+            return _run_gh(["issue", "create", "-R", repo, "--title", str(args.get("title") or ""), "--body", str(args.get("body") or "")])
+        if act == "comment":
+            return _run_gh(["issue", "comment", str(args["number"]), "-R", repo, "--body", str(args.get("body") or "")])
+        if act == "close":
+            return _run_gh(["issue", "close", str(args["number"]), "-R", repo])
+
+    if name == "github_prs":
+        act = args.get("action")
+        repo = str(args["repo"])
+        if act == "list":
+            state = str(args.get("state") or "open")
+            lim = str(int(args.get("limit", 25)))
+            return _run_gh(["pr", "list", "-R", repo, "--state", state, "--limit", lim, "--json", "number,title,state,headRefName,baseRefName,author,updatedAt,url"])
+        if act == "view":
+            return _run_gh(["pr", "view", str(args["number"]), "-R", repo, "--json", "number,title,state,body,additions,deletions,changedFiles,statusCheckRollup,url"])
+        if act == "diff":
+            return _run_gh(["pr", "diff", str(args["number"]), "-R", repo])
+        if act == "checks":
+            return _run_gh(["pr", "checks", str(args["number"]), "-R", repo])
+        if act == "create":
+            cmd = ["pr", "create", "-R", repo, "--title", str(args.get("title") or ""), "--body", str(args.get("body") or "")]
+            if args.get("base"):
+                cmd.extend(["--base", str(args["base"])])
+            if args.get("head"):
+                cmd.extend(["--head", str(args["head"])])
+            return _run_gh(cmd)
+        if act == "merge":
+            return _run_gh(["pr", "merge", str(args["number"]), "-R", repo, "--merge"])
+
+    if name == "github_runs":
+        act = args.get("action")
+        repo = str(args["repo"])
+        if act == "list":
+            lim = str(int(args.get("limit", 15)))
+            return _run_gh(["run", "list", "-R", repo, "--limit", lim, "--json", "databaseId,displayTitle,workflowName,status,conclusion,headBranch,createdAt,url"])
+        if act == "view":
+            return _run_gh(["run", "view", str(args["run_id"]), "-R", repo, "--json", "databaseId,displayTitle,status,conclusion,jobs,url"])
+        if act == "failed_logs":
+            return _run_gh(["run", "view", str(args["run_id"]), "-R", repo, "--log-failed"], timeout_sec=45)
+        if act == "rerun":
+            return _run_gh(["run", "rerun", str(args["run_id"]), "-R", repo])
+
+    if name == "github_releases":
+        act = args.get("action")
+        repo = str(args["repo"])
+        if act == "list":
+            lim = str(int(args.get("limit", 15)))
+            return _run_gh(["release", "list", "-R", repo, "--limit", lim, "--json", "tagName,name,isLatest,publishedAt"])
+        if act == "view":
+            cmd = ["release", "view", "-R", repo]
+            if args.get("tag"):
+                cmd.insert(2, str(args["tag"]))
+            cmd.extend(["--json", "tagName,name,body,publishedAt,assets,url"])
+            return _run_gh(cmd)
+
+    if name == "github_search":
+        kind = str(args["kind"])
+        lim = str(int(args.get("limit", 20)))
+        fields = {
+            "repos": "fullName,description,stargazersCount,updatedAt,url",
+            "code": "path,repository,textMatches,url",
+            "issues": "number,title,repository,state,url",
+            "prs": "number,title,repository,state,url",
+        }[kind]
+        cmd = ["search", kind, str(args["query"]), "--limit", lim, "--json", fields]
+        if kind == "code":
+            cmd = ["search", "code", str(args["query"]), "--limit", lim, "--json", "path,repository,url"]
+        return _run_gh(cmd)
+
+    if name == "github_api":
+        cmd = ["api", str(args["endpoint"])]
+        if args.get("method"):
+            cmd.extend(["-X", str(args["method"])])
+        if args.get("jq"):
+            cmd.extend(["--jq", str(args["jq"])])
+        fields = args.get("fields") or {}
+        if isinstance(fields, dict):
+            for k, v in fields.items():
+                cmd.extend(["-f", f"{k}={v}"])
+        return _run_gh(cmd)
+
+    return {"ok": False, "error": f"Unknown tool: {name}"}
+
+
+def _rpc_result(req_id, result):
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def _rpc_error(req_id, code, message):
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def handle_message(msg):
+    if not isinstance(msg, dict):
+        return _rpc_error(None, -32600, "Invalid Request")
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params") or {}
+    is_notif = ("id" not in msg) or (isinstance(method, str) and method.startswith("notifications/"))
+    if not isinstance(method, str) or not method:
+        return None if is_notif else _rpc_error(req_id, -32600, "Missing method")
+    if is_notif:
+        return None
+    if method == "initialize":
+        req_ver = params.get("protocolVersion") if isinstance(params, dict) else None
+        ver = req_ver if req_ver in SUPPORTED_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
+        return _rpc_result(req_id, {
+            "protocolVersion": ver,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+        })
+    if method == "ping":
+        return _rpc_result(req_id, {})
+    if method == "tools/list":
+        return _rpc_result(req_id, {"tools": TOOLS})
+    if method == "tools/call":
+        tname = params.get("name")
+        targs = params.get("arguments") or {}
+        res = _dispatch_tool(tname, targs)
+        is_err = isinstance(res, dict) and res.get("ok") is False
+        return _rpc_result(req_id, {
+            "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}],
+            "isError": is_err,
+        })
+    return _rpc_error(req_id, -32601, f"Method not found: {method}")
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v"):
+        print(f"{SERVER_NAME} {SERVER_VERSION}")
+        return 0
+    for line in sys.stdin:
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            msg = json.loads(s)
+        except json.JSONDecodeError as e:
+            sys.stdout.write(json.dumps(_rpc_error(None, -32700, f"Parse error: {e}")) + "\n")
+            sys.stdout.flush()
+            continue
+        resp = handle_message(msg)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

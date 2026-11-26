@@ -13,6 +13,7 @@ import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -67,6 +68,7 @@ public final class VoiceForegroundService extends Service {
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
     private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     private boolean hasAudioFocus = false;
     private boolean sessionStarted = false;
@@ -452,19 +454,34 @@ public final class VoiceForegroundService extends Service {
         return builder.build();
     }
 
+    @SuppressWarnings("deprecation")
     private void acquireWakeLock() {
         try {
-            if (wakeLock != null && wakeLock.isHeld()) {
-                return;
-            }
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (pm != null) {
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "agy::voice");
-                wakeLock.setReferenceCounted(false);
-                wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
+            if (wakeLock == null || !wakeLock.isHeld()) {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "agy::voice");
+                    wakeLock.setReferenceCounted(false);
+                    wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
+                }
             }
         } catch (Throwable t) {
             Log.w(TAG, "voice wakelock acquire failed: " + t.getMessage());
+        }
+        try {
+            if (wifiLock == null || !wifiLock.isHeld()) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null) {
+                    int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                            ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                            : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                    wifiLock = wm.createWifiLock(mode, "agy::voice_wifi");
+                    wifiLock.setReferenceCounted(false);
+                    wifiLock.acquire();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "voice wifilock acquire failed: " + t.getMessage());
         }
     }
 
@@ -477,6 +494,14 @@ public final class VoiceForegroundService extends Service {
             Log.w(TAG, "voice wakelock release failed: " + t.getMessage());
         }
         wakeLock = null;
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "voice wifilock release failed: " + t.getMessage());
+        }
+        wifiLock = null;
     }
 
     @SuppressWarnings("deprecation")

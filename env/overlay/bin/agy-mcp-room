@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""
+agy-mcp-room - Cross-Device Agent Chat Room & Shared Project Blackboard MCP Server
+for coordinating Android Antigravity + MacBook Antigravity over a private GitHub hub repo.
+
+Works identically on Android (Bionic Python + gh) and macOS/Linux (Python 3 + gh).
+Zero tokens stored in mcp_config.json — uses authenticated `gh` CLI dynamically.
+"""
+
+import datetime
+import json
+import os
+import platform
+import subprocess
+import sys
+
+SERVER_NAME = "agent-room"
+SERVER_VERSION = "1.0.0"
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+DEFAULT_HUB_REPO = "ONSTRIKER/agy-agent-room"
+
+
+def _detect_peer_id():
+    explicit = os.environ.get("AGY_PEER_NAME", "").strip()
+    if explicit:
+        return explicit
+    if os.path.isdir("/data/user/0") or "ANDROID_ROOT" in os.environ or "/com.agy" in os.path.realpath(__file__):
+        return "android-fold8"
+    sysname = platform.system().lower()
+    host = platform.node().split(".")[0] or sysname
+    if sysname == "darwin":
+        return f"macbook ({host})"
+    return f"{sysname} ({host})"
+
+
+def _find_gh():
+    prefix = os.environ.get("PREFIX", "").strip()
+    if prefix and os.path.isfile(os.path.join(prefix, "bin", "gh")):
+        return os.path.join(prefix, "bin", "gh")
+    for p in ("/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"):
+        if os.path.isfile(p):
+            return p
+    return "gh"
+
+
+def _hub_repo(args):
+    return str(args.get("hub_repo") or os.environ.get("AGY_AGENT_HUB_REPO") or DEFAULT_HUB_REPO).strip()
+
+
+def _run_gh(cli_args, timeout_sec=30):
+    env = os.environ.copy()
+    if not env.get("HOME") and os.path.isdir("/data/user/0/com.agy/files"):
+        env["HOME"] = "/data/user/0/com.agy/files"
+    try:
+        proc = subprocess.run(
+            [_find_gh()] + cli_args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            env=env,
+        )
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            return {"ok": False, "error": err or out or f"gh exited {proc.returncode}"}
+        if out:
+            try:
+                return {"ok": True, "data": json.loads(out)}
+            except json.JSONDecodeError:
+                return {"ok": True, "output": out}
+        return {"ok": True, "output": err}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+TOOLS = [
+    {
+        "name": "room_list",
+        "description": (
+            "List active cross-device Agent Chat Rooms shared between Android Antigravity and "
+            "MacBook Antigravity in the private GitHub hub repository."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "hub_repo": {"type": "string", "description": "Optional hub repo override (default ONSTRIKER/agy-agent-room)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "room_create",
+        "description": "Create a new shared project chat room for Android + MacBook Antigravity collaboration.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Room name, e.g. 'epic-hall-pass — Shared Dev Room'."},
+                "project_repo": {"type": "string", "description": "Associated GitHub repo (e.g. 'ONSTRIKER/epic-hall-pass')."},
+                "goal": {"type": "string", "description": "Current shared goal / architecture summary."},
+                "hub_repo": {"type": "string"},
+            },
+            "required": ["title"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "room_read",
+        "description": (
+            "Read the pinned Shared Project Blackboard (branch, commits, active owners, decisions) "
+            "and recent peer agent messages from a shared chat room."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_number": {"type": "integer", "description": "Room number from room_list (default 1)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Number of latest messages to return (default 20)."},
+                "hub_repo": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "room_post",
+        "description": (
+            "Post a message, status update, architectural proposal, or task handoff to the shared "
+            "Android <-> MacBook Agent Chat Room."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_number": {"type": "integer", "description": "Target room number (default 1)."},
+                "message": {"type": "string", "description": "Markdown message to post to the peer agent."},
+                "handoff_to": {"type": "string", "enum": ["macbook", "android", "both", "none"], "description": "Optional target peer to tag for wakeup/handoff."},
+                "branch": {"type": "string", "description": "Optional git branch currently being worked on."},
+                "commit": {"type": "string", "description": "Optional latest git commit SHA."},
+                "hub_repo": {"type": "string"},
+            },
+            "required": ["message"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "room_update_board",
+        "description": (
+            "Update the room's pinned Shared Project Blackboard (top of room) with current branch, "
+            "Android task ownership, MacBook task ownership, and shared architectural decisions."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_number": {"type": "integer", "description": "Target room number (default 1)."},
+                "board_markdown": {"type": "string", "description": "Updated full Markdown content for the pinned blackboard."},
+                "hub_repo": {"type": "string"},
+            },
+            "required": ["board_markdown"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def _dispatch(name, args):
+    hub = _hub_repo(args)
+    peer = _detect_peer_id()
+    now_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    if name == "room_list":
+        lim = str(int(args.get("limit", 25)))
+        res = _run_gh(["issue", "list", "-R", hub, "--state", "open", "--limit", lim, "--json", "number,title,updatedAt,comments,url"])
+        if not res.get("ok"):
+            return res
+        rooms = []
+        for it in res.get("data", []):
+            rooms.append({
+                "room_number": it.get("number"),
+                "title": it.get("title"),
+                "message_count": len(it.get("comments") or []),
+                "updated_at": it.get("updatedAt"),
+                "url": it.get("url"),
+            })
+        return {"ok": True, "peer_identity": peer, "hub_repo": hub, "rooms": rooms}
+
+    if name == "room_create":
+        title = str(args["title"]).strip()
+        proj = str(args.get("project_repo") or "").strip()
+        goal = str(args.get("goal") or "Shared cross-device coordination between Android Antigravity & MacBook Antigravity.").strip()
+        board = (
+            f"# Shared Project Blackboard: {title}\n\n"
+            f"- **Project Repo:** `{proj or 'TBD'}`\n"
+            f"- **Created By:** `{peer}` at `{now_utc}`\n"
+            f"- **Android Owner (`android-fold8`):** _Available_\n"
+            f"- **MacBook Owner (`macbook`):** _Available_\n\n"
+            f"## Shared Goal & Architecture\n{goal}\n"
+        )
+        res = _run_gh(["issue", "create", "-R", hub, "--title", title, "--body", board])
+        return {"ok": res.get("ok", False), "peer_identity": peer, "room_url": res.get("output"), "error": res.get("error")}
+
+    if name == "room_read":
+        num = str(int(args.get("room_number", 1)))
+        limit = max(1, min(int(args.get("limit", 20)), 100))
+        res = _run_gh(["issue", "view", num, "-R", hub, "--json", "number,title,body,updatedAt,comments,url"])
+        if not res.get("ok"):
+            return res
+        d = res.get("data") or {}
+        comments = d.get("comments") or []
+        recent = comments[-limit:]
+        return {
+            "ok": True,
+            "peer_identity": peer,
+            "room_number": d.get("number"),
+            "title": d.get("title"),
+            "url": d.get("url"),
+            "pinned_blackboard": d.get("body"),
+            "total_messages": len(comments),
+            "recent_messages": [
+                {
+                    "author": (c.get("author") or {}).get("login"),
+                    "created_at": c.get("createdAt"),
+                    "body": c.get("body"),
+                }
+                for c in recent
+            ],
+        }
+
+    if name == "room_post":
+        num = str(int(args.get("room_number", 1)))
+        msg = str(args["message"]).strip()
+        handoff = str(args.get("handoff_to") or "none").lower()
+        branch = str(args.get("branch") or "").strip()
+        commit = str(args.get("commit") or "").strip()
+
+        icon = "📱" if "android" in peer.lower() else "💻"
+        header_parts = [f"{icon} **[{peer}]**", f"`{now_utc}`"]
+        if branch:
+            header_parts.append(f"branch: `{branch}`")
+        if commit:
+            header_parts.append(f"commit: `{commit}`")
+        if handoff in ("macbook", "android", "both"):
+            header_parts.append(f"🔔 **@{handoff}**")
+
+        formatted = " · ".join(header_parts) + "\n\n" + msg
+        res = _run_gh(["issue", "comment", num, "-R", hub, "--body", formatted])
+        return {"ok": res.get("ok", False), "peer_identity": peer, "room_number": int(num), "posted": res.get("output"), "error": res.get("error")}
+
+    if name == "room_update_board":
+        num = str(int(args.get("room_number", 1)))
+        md = str(args["board_markdown"])
+        res = _run_gh(["issue", "edit", num, "-R", hub, "--body", md])
+        return {"ok": res.get("ok", False), "peer_identity": peer, "room_number": int(num), "updated": res.get("output"), "error": res.get("error")}
+
+    return {"ok": False, "error": f"Unknown tool: {name}"}
+
+
+def _rpc_result(req_id, result):
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def _rpc_error(req_id, code, message):
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def handle_message(msg):
+    if not isinstance(msg, dict):
+        return _rpc_error(None, -32600, "Invalid Request")
+    method = msg.get("method")
+    req_id = msg.get("id")
+    params = msg.get("params") or {}
+    is_notif = ("id" not in msg) or (isinstance(method, str) and method.startswith("notifications/"))
+    if not isinstance(method, str) or not method:
+        return None if is_notif else _rpc_error(req_id, -32600, "Missing method")
+    if is_notif:
+        return None
+    if method == "initialize":
+        req_ver = params.get("protocolVersion") if isinstance(params, dict) else None
+        ver = req_ver if req_ver in SUPPORTED_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
+        return _rpc_result(req_id, {
+            "protocolVersion": ver,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+        })
+    if method == "ping":
+        return _rpc_result(req_id, {})
+    if method == "tools/list":
+        return _rpc_result(req_id, {"tools": TOOLS})
+    if method == "tools/call":
+        res = _dispatch(params.get("name"), params.get("arguments") or {})
+        return _rpc_result(req_id, {
+            "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}],
+            "isError": isinstance(res, dict) and res.get("ok") is False,
+        })
+    return _rpc_error(req_id, -32601, f"Method not found: {method}")
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v"):
+        print(f"{SERVER_NAME} {SERVER_VERSION} ({_detect_peer_id()})")
+        return 0
+    for line in sys.stdin:
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            msg = json.loads(s)
+        except json.JSONDecodeError as e:
+            sys.stdout.write(json.dumps(_rpc_error(None, -32700, f"Parse error: {e}")) + "\n")
+            sys.stdout.flush()
+            continue
+        resp = handle_message(msg)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

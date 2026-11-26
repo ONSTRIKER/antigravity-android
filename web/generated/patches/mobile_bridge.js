@@ -1114,7 +1114,12 @@ function trackVoiceSocket(ws) {
     var idx = state.activeVoiceSockets.indexOf(ws);
     if (idx >= 0) state.activeVoiceSockets.splice(idx, 1);
     if (state.activeVoiceSockets.length === 0 && state.voiceServiceActive) {
-      stopNativeVoiceService();
+      // Grace window so mid-call network drops can auto-reconnect before stopping foreground service
+      global.setTimeout(function () {
+        if (state.activeVoiceSockets.length === 0 && state.voiceServiceActive && !findVoiceReconnectButton()) {
+          stopNativeVoiceService();
+        }
+      }, 4500);
     }
   }
   try {
@@ -1188,6 +1193,65 @@ function installMicTrackObserver() {
     };
     wrappedGum.__agVoiceWrapped = true;
     md.getUserMedia = wrappedGum;
+  } catch (_) {}
+}
+
+var voiceReconnectHistory = [];
+var voiceReconnectTimer = null;
+
+function findVoiceReconnectButton() {
+  if (!doc || !doc.querySelectorAll) return null;
+  var buttons = doc.querySelectorAll('button, [role="button"]');
+  for (var i = 0; i < buttons.length; i++) {
+    var b = buttons[i];
+    if (!b || b.disabled || isOwnBridgeElement(b)) continue;
+    var txt = ((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '')).trim();
+    if (/\breconnect\b/i.test(txt) && txt.length < 48) {
+      return b;
+    }
+  }
+  return null;
+}
+
+function maybeTriggerVoiceReconnect() {
+  if (!state.voiceServiceActive && state.activeVoiceSockets.length === 0) return;
+  var btn = findVoiceReconnectButton();
+  if (!btn || voiceReconnectTimer) return;
+
+  var now = Date.now();
+  voiceReconnectHistory = voiceReconnectHistory.filter(function (t) { return (now - t) < 60000; });
+  if (voiceReconnectHistory.length >= 3) return;
+
+  voiceReconnectTimer = global.setTimeout(function () {
+    voiceReconnectTimer = null;
+    if (!state.voiceServiceActive && state.activeVoiceSockets.length === 0) return;
+    var liveBtn = findVoiceReconnectButton();
+    if (!liveBtn) return;
+    voiceReconnectHistory.push(Date.now());
+    try {
+      if (typeof showBridgeToast === 'function') {
+        showBridgeToast('Reconnecting voice stream\u2026');
+      }
+      liveBtn.click();
+    } catch (_) {}
+  }, 1500);
+}
+
+function installVoiceAutoReconnectObserver() {
+  if (!doc || state.voiceReconnectObserverInstalled) return;
+  state.voiceReconnectObserverInstalled = true;
+  try {
+    if (typeof global.MutationObserver === 'function') {
+      var obs = new global.MutationObserver(function () {
+        if (state.voiceServiceActive || state.activeVoiceSockets.length > 0) {
+          maybeTriggerVoiceReconnect();
+        }
+      });
+      var root = doc.body || doc.documentElement;
+      if (root) {
+        obs.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-label', 'title'] });
+      }
+    }
   } catch (_) {}
 }
 
@@ -2218,6 +2282,7 @@ function installMobileBridge() {
   state.dictating = isVoiceDictatingNative();
   installVoiceWebSocketHook();
   installMicTrackObserver();
+  installVoiceAutoReconnectObserver();
   installClipboardImageInterceptor();
   installFocusTracking();
   mountQuickControls();

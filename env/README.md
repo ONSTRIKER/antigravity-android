@@ -26,10 +26,13 @@ env/
 ├── overlay/                # Наложение файлов поверх $PREFIX (etc, bin, lib)
 │   ├── bin/                # Системные скрипты и утилиты AGY
 │   │   ├── agy-daemon      # Фоновый автономный диспетчер задач и планировщик (ConnectRPC + shell)
-│   │   ├── agy-fix-paths   # Утилита динамической нормализации шебангов и путей
+│   │   ├── agy-fix-paths   # Утилита динамической нормализации шебангов ($PREFIX, /usr/bin/env, #!/bin/sh -> /system/bin/sh в плагинах)
 │   │   ├── agy-grant-all   # Утилита пакетной выдачи разрешений, AppOps и снятия Doze-ограничений через Shizuku (rish)
-│   │   ├── agy-mcp-android # Нативный stdio MCP-сервер (26 инструментов: Personal Assistant, Second Brain Memory, Phone Agent UI/уведомления, SystemGateway, Shizuku, daemon)
+│   │   ├── agy-mcp-android # Нативный stdio MCP-сервер v1.3.0 (27 инструментов: Personal Assistant, Second Brain Memory, MediaStore/Gallery Sync, авто-OCR/Shizuku для защищенных диалогов Android 17, SystemGateway, daemon)
 │   │   ├── agy-mcp-browser # Chrome DevTools-совместимый stdio MCP-сервер поверх Android WebView
+│   │   ├── agy-mcp-github  # Нативный stdio MCP-сервер GitHub поверх авторизованного gh CLI (без хранения токенов в mcp_config.json)
+│   │   ├── agy-mcp-room    # Межустройственный MCP-сервер (Android <-> MacBook Agent Chat Room & Blackboard через GitHub)
+│   │   ├── agy-mcp-galaxy  # Нативный MCP-сервер Samsung Galaxy AI, Good Lock и локального управления светом WiZ (UDP 38899)
 │   │   ├── agy-notify      # Утилита управления системными уведомлениями Android
 │   │   ├── agy-upgrade     # Менеджер безопасного обновления, бэкапа и миграций
 │   │   ├── rish            # Клиент Shizuku для привилегированного шелла (uid=2000)

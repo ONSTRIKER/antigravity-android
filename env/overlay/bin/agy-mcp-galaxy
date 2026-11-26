@@ -1,0 +1,245 @@
+#!/data/user/0/com.agy/files/usr/bin/python3
+"""
+agy-mcp-galaxy - Native Samsung Galaxy AI, Good Lock, & Local WiZ Smart Home MCP Server.
+Exposes instant LAN UDP WiZ smart light discovery/control (port 38899, zero cloud auth)
+and direct deep-link/intent orchestration across Samsung Galaxy AI, Good Lock, SmartThings,
+Samsung Notes, Interpreter, and Gemini Tasks.
+"""
+
+import json
+import os
+import socket
+import subprocess
+import sys
+
+SERVER_NAME = "galaxy-ai"
+SERVER_VERSION = "1.0.0"
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+
+
+def _prefix():
+    p = os.environ.get("PREFIX", "").strip()
+    return p if p else os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def _rish(cmd, timeout_sec=8):
+    rish_bin = os.path.join(_prefix(), "bin", "rish")
+    if not os.path.isfile(rish_bin):
+        rish_bin = "rish"
+    try:
+        proc = subprocess.run([rish_bin, "-c", cmd], capture_output=True, text=True, timeout=timeout_sec)
+        return {"ok": proc.returncode == 0, "stdout": (proc.stdout or "").strip(), "stderr": (proc.stderr or "").strip()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _wiz_udp_send(ip, payload, timeout=1.2):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(json.dumps(payload).encode("utf-8"), (ip, 38899))
+        data, addr = sock.recvfrom(4096)
+        return {"ok": True, "ip": addr[0], "response": json.loads(data.decode("utf-8", errors="replace"))}
+    except Exception as e:
+        return {"ok": False, "ip": ip, "error": str(e)}
+    finally:
+        sock.close()
+
+
+def _wiz_discover(timeout=1.2):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(timeout)
+    found = {}
+    msg = json.dumps({"method": "getPilot", "params": {}}).encode("utf-8")
+    try:
+        sock.sendto(msg, ("255.255.255.255", 38899))
+        while True:
+            try:
+                data, addr = sock.recvfrom(4096)
+                parsed = json.loads(data.decode("utf-8", errors="replace"))
+                res = parsed.get("result") or {}
+                found[addr[0]] = {
+                    "ip": addr[0],
+                    "mac": res.get("mac"),
+                    "state": res.get("state"),
+                    "dimming": res.get("dimming"),
+                    "temp": res.get("temp"),
+                    "sceneId": res.get("sceneId"),
+                }
+            except socket.timeout:
+                break
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        sock.close()
+    return {"ok": True, "count": len(found), "lights": list(found.values())}
+
+
+GALAXY_TARGETS = {
+    "smartthings": "com.samsung.android.oneconnect",
+    "samsung_notes": "com.samsung.android.app.notes",
+    "samsung_reminder": "com.samsung.android.app.reminder",
+    "interpreter": "com.samsung.android.app.interpreter",
+    "enhance_x": "com.samsung.android.imageenhancer",
+    "one_hand_operation": "com.samsung.android.sidegesturepad",
+    "good_guardians": "com.android.samsung.utilityapp",
+    "sound_assistant": "com.samsung.android.soundassistant",
+    "camera_assistant": "com.samsung.android.app.cameraassistant",
+    "samsung_health": "com.sec.android.app.shealth",
+    "gemini": "com.google.android.apps.bard",
+    "notebooklm": "com.google.android.apps.labs.language.tailwind",
+    "nycps_attendance": "com.nycpublicschools.attendance",
+    "classroom": "com.google.android.apps.classroom",
+}
+
+TOOLS = [
+    {
+        "name": "wiz_smart_lights",
+        "description": (
+            "Discover and control WiZ V2 smart lights directly over local Wi-Fi UDP (port 38899) "
+            "with zero cloud latency: turn lights on/off, set brightness (10-100), color temperature (2200-6500K), or scenes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["discover", "on", "off", "set"]},
+                "ip": {"type": "string", "description": "Optional specific bulb IP; if omitted, applies to all discovered WiZ lights on LAN."},
+                "brightness": {"type": "integer", "minimum": 10, "maximum": 100, "description": "Dimming % (10..100)."},
+                "temp_kelvin": {"type": "integer", "minimum": 2200, "maximum": 6500, "description": "Color temperature in Kelvin (e.g. 2700 warm, 5000 daylight)."},
+                "scene_id": {"type": "integer", "minimum": 1, "maximum": 32, "description": "WiZ preset scene ID (e.g. 6=Cozy, 11=Warm White, 12=Daylight, 14=Night light)."},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "galaxy_hub",
+        "description": (
+            "Integrate with Samsung Galaxy AI, Good Lock, Samsung Notes, SmartThings, Interpreter, "
+            "Gemini (Tasks/Live), NotebookLM, and Digital Assistant settings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["status", "launch", "create_samsung_note", "open_assistant_settings"],
+                },
+                "target": {
+                    "type": "string",
+                    "enum": sorted(GALAXY_TARGETS.keys()),
+                    "description": "Target Galaxy AI / Good Lock / productivity app for action='launch'.",
+                },
+                "title": {"type": "string", "description": "Note title for create_samsung_note."},
+                "text": {"type": "string", "description": "Note text content for create_samsung_note."},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def _dispatch(name, args):
+    if name == "wiz_smart_lights":
+        act = args.get("action")
+        if act == "discover":
+            return _wiz_discover()
+        ips = [str(args["ip"])] if args.get("ip") else [b["ip"] for b in _wiz_discover().get("lights", [])]
+        if not ips:
+            return {"ok": False, "error": "No WiZ smart lights discovered on current Wi-Fi subnet."}
+        params = {}
+        if act == "on":
+            params["state"] = True
+        elif act == "off":
+            params["state"] = False
+        elif act == "set":
+            params["state"] = True
+            if args.get("brightness") is not None:
+                params["dimming"] = int(args["brightness"])
+            if args.get("temp_kelvin") is not None:
+                params["temp"] = int(args["temp_kelvin"])
+            if args.get("scene_id") is not None:
+                params["sceneId"] = int(args["scene_id"])
+        results = [_wiz_udp_send(ip, {"method": "setPilot", "params": params}) for ip in ips]
+        return {"ok": any(r.get("ok") for r in results), "results": results}
+
+    if name == "galaxy_hub":
+        act = args.get("action")
+        if act == "status":
+            out = _rish("settings get secure assistant; pm list packages com.samsung.android.aicore com.samsung.android.sidegesturepad com.samsung.android.oneconnect")
+            return {
+                "ok": True,
+                "current_digital_assistant": (out.get("stdout") or "").splitlines()[0] if out.get("stdout") else "",
+                "available_targets": GALAXY_TARGETS,
+                "raw": out.get("stdout"),
+            }
+        if act == "launch":
+            pkg = GALAXY_TARGETS.get(str(args.get("target") or ""))
+            if not pkg:
+                return {"ok": False, "error": f"Unknown target: {args.get('target')}"}
+            r = _rish(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+            return {"ok": r.get("ok", False), "launched": pkg}
+        if act == "create_samsung_note":
+            txt = str(args.get("text") or "").replace("'", "'\\''")
+            ttl = str(args.get("title") or "AI Note").replace("'", "'\\''")
+            r = _rish(
+                f"am start -a android.intent.action.SEND -t 'text/plain' -p com.samsung.android.app.notes "
+                f"--es android.intent.extra.SUBJECT '{ttl}' --es android.intent.extra.TEXT '{txt}'"
+            )
+            return {"ok": r.get("ok", False), "note_staged": True, "title": ttl}
+        if act == "open_assistant_settings":
+            r = _rish("am start -a android.settings.VOICE_INPUT_SETTINGS")
+            return {"ok": r.get("ok", False), "opened": "android.settings.VOICE_INPUT_SETTINGS"}
+
+    return {"ok": False, "error": f"Unknown tool: {name}"}
+
+
+def _rpc_result(req_id, result):
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def _rpc_error(req_id, code, message):
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v"):
+        print(f"{SERVER_NAME} {SERVER_VERSION}")
+        return 0
+    for line in sys.stdin:
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            msg = json.loads(s)
+        except json.JSONDecodeError as e:
+            sys.stdout.write(json.dumps(_rpc_error(None, -32700, f"Parse error: {e}")) + "\n")
+            sys.stdout.flush()
+            continue
+        method = msg.get("method")
+        req_id = msg.get("id")
+        params = msg.get("params") or {}
+        if ("id" not in msg) or (isinstance(method, str) and method.startswith("notifications/")):
+            continue
+        if method == "initialize":
+            ver = params.get("protocolVersion") if params.get("protocolVersion") in SUPPORTED_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
+            resp = _rpc_result(req_id, {"protocolVersion": ver, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}})
+        elif method == "ping":
+            resp = _rpc_result(req_id, {})
+        elif method == "tools/list":
+            resp = _rpc_result(req_id, {"tools": TOOLS})
+        elif method == "tools/call":
+            res = _dispatch(params.get("name"), params.get("arguments") or {})
+            resp = _rpc_result(req_id, {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}], "isError": res.get("ok") is False})
+        else:
+            resp = _rpc_error(req_id, -32601, f"Method not found: {method}")
+        sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
