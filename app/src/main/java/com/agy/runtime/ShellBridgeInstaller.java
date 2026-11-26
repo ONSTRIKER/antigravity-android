@@ -35,7 +35,7 @@ public final class ShellBridgeInstaller {
     /** Records which prefix the bulk bridges were generated for. Bump when the
      *  bridge script format changes so a warm launch regenerates them once. */
     private static final String BRIDGE_MARKER = ".agy-bridges";
-    private static final int BRIDGE_FORMAT = 4;
+    private static final int BRIDGE_FORMAT = 5;
 
     private ShellBridgeInstaller() {
     }
@@ -292,6 +292,9 @@ public final class ShellBridgeInstaller {
         sb.append("export OPENSSL_CONF=\"$PREFIX/etc/tls/openssl.cnf\"\n");
         sb.append("export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
         sb.append("export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export NODE_EXTRA_CA_CERTS=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export GIT_SSL_CAINFO=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export GODEBUG=\"netdns=cgo\"\n");
         sb.append("export GIT_CONFIG_NOSYSTEM=1\n");
         sb.append("export GIT_ATTR_NOSYSTEM=1\n");
         sb.append("export GIT_TEMPLATE_DIR=\"$PREFIX/share/git-core/templates\"\n");

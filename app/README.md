@@ -51,8 +51,8 @@ graph TD
 
     subgraph Platform_Layer ["Интеграция с Android"]
         AFP["AppFileProvider (${applicationId}.fileprovider)"]
-        DCH["DocumentsContractHelper (Преобразование SAF в /storage/...)"]
-        SHB["ShizukuBridge / RishExecutor (ADB Shell uid=2000)"]
+        DCH["DocumentsContractHelper (SAF primary:, raw: и Downloads URI -> /storage/...)"]
+        SHB["ShizukuBridge / RishExecutor (ADB Shell uid=2000 + rish_shizuku.dex)"]
         LIS["LauncherIconSwitcher (Динамическая смена иконки)"]
     end
 

@@ -56,7 +56,7 @@ sequenceDiagram
 web/
 ├── build.sh                      # Баш-оркестратор сборщика фрагментов и патчера
 ├── src.manifest                  # Декларативный манифест сборки web/generated/**
-├── patch_main.py                 # Патчер upstream main.js (Desktop Mode + монохромное Eza)
+├── patch_main.py                 # Патчер upstream main.js (Desktop Mode + отключение enableTerminalSandbox на Android)
 ├── index.html                    # Корневой HTML-шаблон хоста приложения
 ├── main.js                       # Исходный (upstream) обфусцированный бандл React UI (~9.9 МБ)
 ├── jetbox.css                    # Стили специфичных контролов и терминала

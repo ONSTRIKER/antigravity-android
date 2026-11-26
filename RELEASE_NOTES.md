@@ -1,4 +1,4 @@
-# Antigravity for Android v2.4.1
+# Antigravity for Android v2.5.0
 
 ## Спецификация пакетов релиза
 
@@ -7,6 +7,15 @@
 | **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с оригинальными проверками Google (чистая версия без модификаций кода аутентификации). |
 | **`antigravity-region-bypass.apk`** | `com.agy` | 45157 | Редакция с обходом проверки учетных записей (позволяет авторизоваться под аккаунтами, блокируемыми со стороны Google; требует наличия сетевого туннеля/VPN). |
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
+
+---
+
+## Изменения и исправления (v2.5.0)
+
+* **Core & Web UI v2.34.0 (`/swarm`, Remote Agents, Voice Mode, Rich Approvals, Clipboard Image Paste, Native Android & Browser MCPs):** Обновлены ядро `language_server` и веб-бандл до `v2.34.0`, добавлены голосовой режим, вставка изображений и скриншотов из буфера обмена/Gboard, нативные MCP-серверы `android-device` и `chrome_devtools`, панель дополнительных клавиш и Share Sheet.
+* **Отключение неподдерживаемой десктопной песочницы на Android (Issues #40, #41):** В `web/patch_main.py` отключен флаг `enableTerminalSandbox` для пресетов `Default` и `Auto`, устраняя ошибку `fork/exec .../libloader.so: invalid argument` при первом вызове `run_command`.
+* **Исправление выбора папок Downloads (`DocumentsContractHelper`, Issue #41):** Добавлена обработка префиксов `raw:` и виртуальных идентификаторов провайдера `com.android.providers.downloads.documents` (`msd:`, числовые ID).
+* **Улучшение мостов Bionic и окружения шелла (PR #36 + Userspace Fixes):** Приоритет `SHELL` переведен на мост `runtime/bin/bash`, в мосты добавлены `GODEBUG=netdns=cgo`, `NODE_EXTRA_CA_CERTS` и `GIT_SSL_CAINFO`, в `pkg` и `agy-fix-paths` добавлено переписывание симлинков Termux (исправление SSL в `python-pip`), а `rish_shizuku.dex` включен в `env/overlay/share/rish/` из коробки.
 
 ---
 

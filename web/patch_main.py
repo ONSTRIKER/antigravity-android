@@ -84,9 +84,21 @@ def patch_main(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    if "Desktop Mode" in content or "ag_desktop_mode" in content:
-        print("[web-patch] Desktop Mode toggle already present in main.js")
+    # Android does not support desktop bubblewrap/seccomp re-exec sandboxing
+    # (re-execing /proc/self/exe hits glibc libloader.so with EINVAL). Disable
+    # enableTerminalSandbox on presets so Default and Auto run natively.
+    sandbox_patched = content.replace("enableTerminalSandbox:!0", "enableTerminalSandbox:!1")
+
+    if "Desktop Mode" in sandbox_patched or "ag_desktop_mode" in sandbox_patched:
+        if sandbox_patched != content:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(sandbox_patched)
+            print("[web-patch] Disabled unsupported desktop enableTerminalSandbox in main.js")
+        else:
+            print("[web-patch] Desktop Mode toggle and sandbox fix already present in main.js")
         return True
+
+    content = sandbox_patched
 
     # 1. JSX Theme element injection: find Theme element in Appearance
     theme_idx = content.find('{label:"Theme"')

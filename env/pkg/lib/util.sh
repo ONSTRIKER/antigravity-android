@@ -50,20 +50,28 @@ rewrite_prefix() {
         targets=("$PREFIX")
     fi
 
-    # Separate existing regular files from directories/other
-    local files=() dirs=() t
+    # Separate existing regular files, symlinks, and directories
+    local files=() links=() dirs=() t link_dst new_dst
     for t in "${targets[@]}"; do
-        if [ -f "$t" ] && [ ! -L "$t" ]; then
+        if [ -L "$t" ]; then
+            links+=("$t")
+        elif [ -f "$t" ]; then
             files+=("$t")
         elif [ -d "$t" ]; then
             dirs+=("$t")
-        elif [ -e "$t" ]; then
-            # Symlink or special file, skip
-            continue
         fi
     done
 
-    # 1. Process explicit regular files directly
+    # 1. Process explicit symlinks
+    for t in "${links[@]}"; do
+        link_dst="$(readlink "$t" 2>/dev/null)" || continue
+        new_dst="$(printf '%s' "$link_dst" | sed -E "s@$pattern@$esc@g")"
+        if [ -n "$new_dst" ] && [ "$new_dst" != "$link_dst" ]; then
+            ln -snf "$new_dst" "$t" 2>/dev/null || true
+        fi
+    done
+
+    # 2. Process explicit regular files directly
     if [ "${#files[@]}" -gt 0 ]; then
         grep -IlZ -E -e "$pattern" -- "${files[@]}" 2>/dev/null \
             | while IFS= read -r -d '' f; do
@@ -71,11 +79,19 @@ rewrite_prefix() {
             done
     fi
 
-    # 2. Process directories recursively
+    # 3. Process directories recursively (regular files + symlinks)
     if [ "${#dirs[@]}" -gt 0 ]; then
         grep -rIlZ -E -e "$pattern" -- "${dirs[@]}" 2>/dev/null \
             | while IFS= read -r -d '' f; do
                 sed -i -E "s@$pattern@$esc@g" "$f" 2>/dev/null || true
+            done
+        find "${dirs[@]}" -type l -print0 2>/dev/null \
+            | while IFS= read -r -d '' f; do
+                link_dst="$(readlink "$f" 2>/dev/null)" || continue
+                new_dst="$(printf '%s' "$link_dst" | sed -E "s@$pattern@$esc@g")"
+                if [ -n "$new_dst" ] && [ "$new_dst" != "$link_dst" ]; then
+                    ln -snf "$new_dst" "$f" 2>/dev/null || true
+                fi
             done
     fi
 }
