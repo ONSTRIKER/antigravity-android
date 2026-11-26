@@ -54,6 +54,9 @@ public final class PhoneAgentHandler {
                 JSONObject nav = openNamedSetting(openSetting);
                 out.put("opened_setting", nav);
             }
+            boolean reqPerms = payload != null && payload.optBoolean("request_permissions", false);
+            JSONObject assistantPerms = new PersonalAssistantHandler(appContext).handlePermissions(
+                    new JSONObject().put("request", reqPerms));
 
             boolean a11yConnected = AgyAccessibilityService.isConnected();
             boolean a11yEnabled = AgyAccessibilityService.isEnabledInSettings(appContext);
@@ -90,6 +93,7 @@ public final class PhoneAgentHandler {
             out.put("all_files_access", allFilesAccess);
             out.put("can_draw_overlays", canDrawOverlays);
             out.put("can_request_package_installs", canRequestInstalls);
+            out.put("assistant_permissions", assistantPerms.optJSONObject("permissions"));
         } catch (Throwable t) {
             putError(out, t.getMessage());
         }
@@ -162,6 +166,14 @@ public final class PhoneAgentHandler {
     }
 
     public JSONObject handleNotificationsList(JSONObject payload) {
+        if (payload != null && payload.optBoolean("history", false)) {
+            return AgyNotificationListenerService.queryHistory(
+                    appContext,
+                    payload.optString("package", ""),
+                    payload.optString("query", ""),
+                    payload.optLong("since_ms", 0L),
+                    payload.optInt("limit", 50));
+        }
         AgyNotificationListenerService svc = AgyNotificationListenerService.getInstance();
         if (svc == null) {
             JSONObject out = new JSONObject();
@@ -182,6 +194,9 @@ public final class PhoneAgentHandler {
     }
 
     public JSONObject handleNotificationAction(JSONObject payload) {
+        if (payload != null && "vip_rules".equalsIgnoreCase(payload.optString("action", ""))) {
+            return AgyNotificationListenerService.manageVipRules(appContext, payload);
+        }
         AgyNotificationListenerService svc = AgyNotificationListenerService.getInstance();
         if (svc == null) {
             JSONObject out = new JSONObject();

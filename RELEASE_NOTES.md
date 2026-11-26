@@ -1,4 +1,4 @@
-# Antigravity for Android v2.7.0
+# Antigravity for Android v2.8.0
 
 ## Спецификация пакетов релиза
 
@@ -7,6 +7,23 @@
 | **`antigravity.apk`** | `com.agy` | 45157 | Стандартная редакция с оригинальными проверками Google (чистая версия без модификаций кода аутентификации). |
 | **`antigravity-region-bypass.apk`** | `com.agy` | 45157 | Редакция с обходом проверки учетных записей (позволяет авторизоваться под аккаунтами, блокируемыми со стороны Google; требует наличия сетевого туннеля/VPN). |
 | **`SHA256SUMS.txt`** | — | — | Криптографические контрольные суммы бинарных файлов. |
+
+---
+
+## Изменения и исправления (v2.8.0)
+
+* **Проактивное ядро 24/7 (`BootCompletedReceiver`, `ProactiveAlarmReceiver`, исправление запуска `agy-daemon`):**
+  * Добавлен `BootCompletedReceiver` (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, `QUICKBOOT_POWERON`), автоматически поднимающий `CoreServerService`, `agy-daemon` и точные будильники после перезагрузки смартфона или самообновления APK.
+  * Добавлен `ProactiveAlarmReceiver` на базе `AlarmManager.setExactAndAllowWhileIdle` с сохранением расписания в `exact_alarms.json` для точных утренних брифингов и напоминаний даже в режиме глубокого сна Android Doze.
+  * Исправлен запуск `agy-daemon` в `CoreServerService` и `ShellBridgeInstaller` (`BRIDGE_FORMAT = 7`) через прямой вызов Bionic `python3` с корректным окружением `LD_LIBRARY_PATH`/`SSL_CERT_FILE`, добавлена команда `agy-daemon dispatch-prompt`.
+* **Журнал истории уведомлений и движок VIP-правил пробуждения (`AgyNotificationListenerService`):**
+  * Добавлено энергонезависимое кольцевое хранилище входящих уведомлений (`files/logs/notification_history.jsonl` с автокомпактификацией и дедупликацией) — даже смахнутые письма и сообщения остаются доступны для дайджестов.
+  * Добавлен движок `vip_rules` с защитой бюджета прерываний (`cooldown_sec`) и тихими часами (`quiet_hours`), способный мгновенно пробуждать ИИ-каскад через ConnectRPC при получении важных писем/сообщений.
+* **Нативные провайдеры персонального контекста (`PersonalAssistantHandler`, `PermissionRequestActivity`):**
+  * Добавлен прямой доступ `<10 мс` к телефонной книге (`ContactsContract`), единому календарю устройства (`CalendarContract.Instances` — объединяет рабочий **Microsoft Outlook**, **Google Calendar** и **Samsung Calendar** с раскрытием повторяющихся встреч), системным будильникам/таймерам (`AlarmClock`), геолокации (`LocationManager`) и истории SMS/звонков (`Telephony.Sms`, `CallLog.Calls`).
+* **Долговременная память «Second Brain» (`MemoryStore` SQLite FTS5) и 26 MCP-инструментов:**
+  * Реализовано локальное полнотекстовое хранилище `assistant.db` (SQLite WAL + FTS5 BM25 + автогенерация `MEMORY_SNAPSHOT.md`) для людей/коллег, проектов, обязательств со сроками (`due_at`), предпочтений и карьерного портфолио (`career_win`).
+  * MCP-сервер `agy-mcp-android` (`v1.2.0`) расширен до **26 инструментов** (`android_contacts`, `android_device_calendar`, `android_alarms`, `android_location`, `android_comms_history`, `android_memory`, а также `history`/`vip_rules` в `android_notifications`), добавлены встроенные скиллы `executive-assistant` и `career-edtech-copilot`.
 
 ---
 

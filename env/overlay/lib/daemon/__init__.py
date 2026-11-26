@@ -14,6 +14,7 @@ from .executor import (
     notify,
     wake_antigravity_app,
     execute_action_async,
+    execute_ai_prompt,
     load_tasks,
     save_tasks,
     CONFIG_DIR,
@@ -25,6 +26,7 @@ from .executor import (
     RUNNING_JOBS,
     RUNNING_LOCK,
 )
+from .memory_store import MemoryStore
 
 __all__ = [
     "matches_cron",

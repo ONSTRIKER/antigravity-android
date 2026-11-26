@@ -47,6 +47,7 @@ from daemon.executor import (
     notify,
     wake_antigravity_app,
     execute_action_async,
+    execute_ai_prompt,
     load_tasks,
     save_tasks,
     CONFIG_DIR,
@@ -489,6 +490,13 @@ def main():
     p_clear = subparsers.add_parser("clear", help="Clear all scheduled tasks")
     p_clear.add_argument("--json", action="store_true", help="Output as JSON")
 
+    p_dispatch = subparsers.add_parser("dispatch-prompt", help="Immediately dispatch an event-driven AI prompt via ConnectRPC")
+    p_dispatch.add_argument("--name", default="Proactive Event", help="Event label")
+    p_dispatch.add_argument("--prompt", required=True, help="Prompt text to send to language_server")
+    p_dispatch.add_argument("--project", default="", help="Optional workspace path")
+    p_dispatch.add_argument("--conversation-id", default="", help="Optional existing cascade ID")
+    p_dispatch.add_argument("--json", action="store_true", help="Output as JSON")
+
     # Dedicated Task Manager submodule
     p_task = subparsers.add_parser("task", help="Autonomous AI Task Manager")
     task_subs = p_task.add_subparsers(dest="task_cmd")
@@ -554,6 +562,25 @@ def main():
         cmd_task_remove(args)
     elif args.subcommand == "clear":
         cmd_clear(args)
+    elif args.subcommand == "dispatch-prompt":
+        try:
+            cid = execute_ai_prompt(
+                prompt=args.prompt,
+                project=args.project or "",
+                conversation_id=args.conversation_id or "",
+                timeout_sec=60,
+            )
+            log(f"Dispatched proactive prompt [{args.name}] -> cascade {cid}")
+            if getattr(args, "json", False):
+                print(json.dumps({"ok": True, "cascade_id": cid}))
+            else:
+                print(f"[agy-daemon] Dispatched prompt to cascade: {cid}")
+        except Exception as e:
+            log(f"Proactive prompt [{args.name}] fallback notify: {e}")
+            notify(args.name, args.prompt[:180], tag="agy_vip_fallback")
+            if getattr(args, "json", False):
+                print(json.dumps({"ok": False, "error": str(e)}))
+            sys.exit(1)
     elif args.subcommand == "task":
         if args.task_cmd == "add":
             cmd_task_add(args)

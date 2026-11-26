@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 SERVER_NAME = "android-device"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_GATEWAY_PORT = 45160
@@ -693,6 +693,10 @@ TOOLS = [
                     ],
                     "description": "Optional Android Settings screen to open immediately for the user.",
                 },
+                "request_permissions": {
+                    "type": "boolean",
+                    "description": "When true, prompt on screen for any missing Personal Assistant permissions (Contacts, Calendar, Location, SMS, Call Log).",
+                },
             },
             "additionalProperties": False,
         },
@@ -942,21 +946,29 @@ TOOLS = [
     {
         "name": "android_notifications",
         "description": (
-            "Read active cross-app Android notifications, open a notification's contentIntent, "
-            "dismiss notifications, trigger action buttons, or send inline RemoteInput replies "
-            "(e.g. replying to SMS/WhatsApp/Telegram/Slack directly from the notification shade)."
+            "Read active or historical cross-app Android notifications (including swiped-away notifications), "
+            "open a notification's contentIntent, dismiss notifications, trigger action buttons, send inline "
+            "RemoteInput replies, or configure proactive VIP notification wakeup rules & quiet hours."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "open", "dismiss", "dismiss_all", "trigger_action", "reply"],
+                    "enum": ["list", "history", "open", "dismiss", "dismiss_all", "trigger_action", "reply", "vip_rules"],
                     "description": "Notification operation to perform.",
                 },
                 "package": {
                     "type": "string",
-                    "description": "Optional package filter when listing notifications.",
+                    "description": "Optional package filter when listing active or historical notifications.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional text/sender search filter for action='history'.",
+                },
+                "since_ms": {
+                    "type": "integer",
+                    "description": "Optional epoch timestamp (ms) lower bound for action='history'.",
                 },
                 "include_ongoing": {
                     "type": "boolean",
@@ -965,8 +977,8 @@ TOOLS = [
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 200,
-                    "description": "Max notifications to return for list (default 50).",
+                    "maximum": 300,
+                    "description": "Max notifications to return (default 50).",
                 },
                 "key": {
                     "type": "string",
@@ -981,6 +993,266 @@ TOOLS = [
                     "type": "string",
                     "description": "Inline message text to send via RemoteInput (for action='reply').",
                 },
+                "rule_action": {
+                    "type": "string",
+                    "enum": ["list", "add", "remove", "set_quiet_hours"],
+                    "description": "Sub-action when action='vip_rules'.",
+                },
+                "rule_id": {
+                    "type": "string",
+                    "description": "VIP rule identifier (for vip_rules add/remove).",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable VIP rule name.",
+                },
+                "package_contains": {
+                    "type": "string",
+                    "description": "Package substring match for VIP rule (e.g. 'outlook', 'gm', 'whatsapp').",
+                },
+                "sender_contains": {
+                    "type": "string",
+                    "description": "Notification title/sender substring match for VIP rule.",
+                },
+                "text_contains": {
+                    "type": "string",
+                    "description": "Notification body substring match for VIP rule.",
+                },
+                "cooldown_sec": {
+                    "type": "integer",
+                    "minimum": 30,
+                    "description": "Minimum seconds between wakeups for this rule (default 300).",
+                },
+                "override_quiet_hours": {
+                    "type": "boolean",
+                    "description": "Allow this VIP rule to fire even during quiet hours.",
+                },
+                "wake_ai": {
+                    "type": "boolean",
+                    "description": "Dispatch an autonomous ConnectRPC AI triage prompt when matched.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Custom AI triage prompt when wake_ai=true.",
+                },
+                "quiet_hours_start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23,
+                    "description": "Quiet hours start hour (0..23, default 22).",
+                },
+                "quiet_hours_end": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23,
+                    "description": "Quiet hours end hour (0..23, default 6).",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_contacts",
+        "description": (
+            "Search and resolve phone Contacts (names, phone numbers, email addresses, "
+            "companies, and job titles) via Android ContactsContract, or open the Add Contact sheet."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "add_intent"],
+                    "description": "Search contacts (default) or open pre-filled contact creation UI.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Case-insensitive name, email, phone, company, or role substring to search.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 300,
+                    "description": "Maximum contacts to return (default 50).",
+                },
+                "name": {"type": "string", "description": "Contact full name (for add_intent)."},
+                "phone": {"type": "string", "description": "Contact phone number (for add_intent)."},
+                "email": {"type": "string", "description": "Contact email address (for add_intent)."},
+                "company": {"type": "string", "description": "Organization/school name (for add_intent)."},
+                "job_title": {"type": "string", "description": "Role/title (for add_intent)."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_device_calendar",
+        "description": (
+            "Read or create events across ALL calendars synced to the Android phone simultaneously "
+            "(Microsoft Outlook work calendar, Google Calendar, Samsung Calendar) via CalendarContract, "
+            "including automatically expanded recurring events and class/meeting schedules."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["events", "calendars", "create"],
+                    "description": "Query expanded event instances (default), list synced calendars, or create an event.",
+                },
+                "days_ahead": {
+                    "type": "number",
+                    "description": "Number of days ahead from now to query when end_ms is omitted (default 7).",
+                },
+                "start_ms": {
+                    "type": "integer",
+                    "description": "Optional start epoch timestamp in milliseconds.",
+                },
+                "end_ms": {
+                    "type": "integer",
+                    "description": "Optional end epoch timestamp in milliseconds.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword filter matching title, description, location, or calendar.",
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional account/calendar filter (e.g. 'outlook', 'nyc', 'gmail').",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum events to return (default 100).",
+                },
+                "calendar_id": {"type": "integer", "description": "Target calendar ID for action='create'."},
+                "title": {"type": "string", "description": "Event title for action='create'."},
+                "begin_ms": {"type": "integer", "description": "Event start timestamp (ms) for action='create'."},
+                "description": {"type": "string", "description": "Event description for action='create'."},
+                "location": {"type": "string", "description": "Event location for action='create'."},
+                "all_day": {"type": "boolean", "description": "All-day flag for action='create'."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_alarms",
+        "description": (
+            "Set native Android/Samsung Clock alarms and countdown timers silently, or manage "
+            "Doze-proof hardware-exact proactive AI wakeup alarms (AlarmManager.setExactAndAllowWhileIdle)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["set_clock_alarm", "set_timer", "schedule_exact", "cancel_exact", "list_exact"],
+                    "description": "Clock or proactive exact-alarm operation.",
+                },
+                "hour": {"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour (0..23) for set_clock_alarm or schedule_exact."},
+                "minute": {"type": "integer", "minimum": 0, "maximum": 59, "description": "Minute (0..59) for set_clock_alarm or schedule_exact."},
+                "seconds": {"type": "integer", "minimum": 1, "description": "Countdown duration in seconds for set_timer."},
+                "label": {"type": "string", "description": "Alarm or timer label in Clock app."},
+                "skip_ui": {"type": "boolean", "description": "Set Clock alarm/timer silently without opening UI (default true)."},
+                "alarm_id": {"type": "string", "description": "Unique identifier for schedule_exact or cancel_exact."},
+                "trigger_at_ms": {"type": "integer", "description": "Exact epoch timestamp (ms) for schedule_exact."},
+                "task_id": {"type": "string", "description": "agy-daemon task ID to trigger when exact alarm fires."},
+                "title": {"type": "string", "description": "Notification title if task_id is omitted."},
+                "message": {"type": "string", "description": "Notification message if task_id is omitted."},
+                "repeat_daily": {"type": "boolean", "description": "Repeat exact wakeup daily at the same time."},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_location",
+        "description": (
+            "Retrieve the device's current GPS/Network coordinates, accuracy, fix age, "
+            "and Google Maps link for commute, weather, and location-aware assistance."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "fresh": {
+                    "type": "boolean",
+                    "description": "Request a live location update instead of cached last-known fix.",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 15000,
+                    "description": "Max wait time in ms when fresh=true (default 5000).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_comms_history",
+        "description": (
+            "Search recent SMS text messages or phone Call Log entries (including missed calls) "
+            "via Android Telephony and CallLog providers."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["sms", "calls"],
+                    "description": "Query SMS messages ('sms') or phone call history ('calls').",
+                },
+                "query": {"type": "string", "description": "Keyword or sender filter for SMS search."},
+                "address": {"type": "string", "description": "Phone number / sender filter for SMS search."},
+                "missed_only": {"type": "boolean", "description": "Return only missed calls when kind='calls'."},
+                "since_ms": {"type": "integer", "description": "Optional lower-bound timestamp in ms."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Max entries to return (default 30)."},
+            },
+            "required": ["kind"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "android_memory",
+        "description": (
+            "Persistent SQLite FTS5 Second Brain & Career Memory across conversations. "
+            "Store, search, and digest people/stakeholders, active projects, follow-up commitments "
+            "with due dates, user preferences, and career accomplishments ('brag sheet')."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["upsert", "search", "briefing_digest", "update_status", "delete"],
+                    "description": "Memory store operation.",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["person", "project", "commitment", "career_win", "preference", "note"],
+                    "description": "Memory category (for upsert, search, update_status, delete).",
+                },
+                "id": {"type": "integer", "description": "Numeric memory row ID (for update_status or delete)."},
+                "key": {"type": "string", "description": "Optional stable slug key for upsert/update_status/delete."},
+                "title": {"type": "string", "description": "Concise memory title (required for upsert)."},
+                "content": {"type": "string", "description": "Detailed memory facts, context, or STAR metric (for upsert)."},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional tags list for organization and search.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "waiting", "completed", "archived"],
+                    "description": "Lifecycle status (default 'active').",
+                },
+                "due_at": {
+                    "type": "string",
+                    "description": "Optional ISO date 'YYYY-MM-DD' for commitments/deadlines.",
+                },
+                "query": {"type": "string", "description": "Full-text BM25 search query (for search)."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Max results for search (default 25)."},
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -1335,6 +1607,8 @@ def handle_agent_status(args):
     payload = {}
     if args.get("open_setting"):
         payload["open_setting"] = str(args["open_setting"])
+    if args.get("request_permissions"):
+        payload["request_permissions"] = bool(args["request_permissions"])
     return gateway_post("ui_status", payload)
 
 
@@ -1452,6 +1726,22 @@ def handle_notifications(args):
             if key in args and args[key] is not None:
                 payload[key] = args[key]
         return gateway_post("notifications_list", payload, timeout=10.0)
+    if action == "history":
+        payload = {"history": True}
+        for key in ("package", "query", "since_ms", "limit"):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("notification_history", payload, timeout=10.0)
+    if action == "vip_rules":
+        payload = {"action": "vip_rules"}
+        for key in (
+            "rule_action", "rule_id", "name", "package_contains", "sender_contains",
+            "text_contains", "cooldown_sec", "override_quiet_hours", "wake_ai",
+            "prompt", "quiet_hours_start", "quiet_hours_end",
+        ):
+            if key in args and args[key] is not None:
+                payload[key] = args[key]
+        return gateway_post("vip_rules", payload, timeout=10.0)
     if action in ("open", "dismiss", "dismiss_all", "trigger_action", "reply"):
         payload = {"action": action}
         for key in ("key", "action_index", "reply_text"):
@@ -1459,6 +1749,101 @@ def handle_notifications(args):
                 payload[key] = args[key]
         return gateway_post("notification_action", payload, timeout=10.0)
     return {"ok": False, "error": f"unsupported notifications action: {action}"}
+
+
+def handle_contacts(args):
+    payload = {}
+    for key in ("action", "query", "limit", "name", "phone", "email", "company", "job_title"):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    return gateway_post("contacts", payload, timeout=15.0)
+
+
+def handle_device_calendar(args):
+    payload = {}
+    for key in (
+        "action", "days_ahead", "start_ms", "end_ms", "query", "account", "limit",
+        "calendar_id", "title", "begin_ms", "description", "location", "all_day",
+    ):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    return gateway_post("device_calendar", payload, timeout=15.0)
+
+
+def handle_alarms(args):
+    payload = {}
+    for key in (
+        "action", "hour", "minute", "seconds", "label", "skip_ui",
+        "alarm_id", "trigger_at_ms", "task_id", "title", "message", "repeat_daily",
+    ):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    return gateway_post("alarms", payload, timeout=10.0)
+
+
+def handle_location(args):
+    payload = {}
+    for key in ("fresh", "timeout_ms"):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    http_timeout = max(10.0, float(args.get("timeout_ms", 5000)) / 1000.0 + 5.0)
+    return gateway_post("location", payload, timeout=http_timeout)
+
+
+def handle_comms_history(args):
+    payload = {}
+    for key in ("kind", "query", "address", "missed_only", "since_ms", "limit"):
+        if key in args and args[key] is not None:
+            payload[key] = args[key]
+    return gateway_post("comms_history", payload, timeout=15.0)
+
+
+def _load_memory_store():
+    lib_dir = os.path.join(get_prefix(), "lib")
+    repo_lib = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+    for candidate in (lib_dir, repo_lib):
+        if os.path.isdir(candidate) and candidate not in sys.path:
+            sys.path.insert(0, candidate)
+    from daemon.memory_store import MemoryStore  # noqa: E402
+    return MemoryStore(home=get_home())
+
+
+def handle_memory(args):
+    action = str(args.get("action") or "").strip().lower()
+    store = _load_memory_store()
+    if action == "upsert":
+        return store.upsert(
+            category=args.get("category", "note"),
+            title=args.get("title", ""),
+            content=args.get("content", ""),
+            key=args.get("key"),
+            tags=args.get("tags"),
+            status=args.get("status", "active"),
+            due_at=args.get("due_at", ""),
+        )
+    if action == "search":
+        return store.search(
+            query=args.get("query", ""),
+            category=args.get("category", ""),
+            status=args.get("status", ""),
+            limit=args.get("limit", 25),
+        )
+    if action == "briefing_digest":
+        return store.briefing_digest()
+    if action == "update_status":
+        return store.update_status(
+            mem_id=args.get("id"),
+            category=args.get("category", ""),
+            key=args.get("key", ""),
+            status=args.get("status", "completed"),
+        )
+    if action == "delete":
+        return store.delete(
+            mem_id=args.get("id"),
+            category=args.get("category", ""),
+            key=args.get("key", ""),
+        )
+    return {"ok": False, "error": f"unsupported memory action: {action}"}
 
 
 TOOL_HANDLERS = {
@@ -1482,6 +1867,12 @@ TOOL_HANDLERS = {
     "android_apps": handle_apps,
     "android_intent": handle_intent,
     "android_notifications": handle_notifications,
+    "android_contacts": handle_contacts,
+    "android_device_calendar": handle_device_calendar,
+    "android_alarms": handle_alarms,
+    "android_location": handle_location,
+    "android_comms_history": handle_comms_history,
+    "android_memory": handle_memory,
 }
 
 

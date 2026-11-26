@@ -241,6 +241,53 @@ class _MockGatewayHandler(BaseHTTPRequestHandler):
                 "action": payload.get("action"),
                 "key": payload.get("key", ""),
             })
+        elif cmd == "notification_history":
+            self._send_json({
+                "ok": True,
+                "count": 1,
+                "history": [
+                    {"ts": 1700000000000, "package": "com.microsoft.office.outlook", "title": "Principal", "text": "Staff meeting moved to 2:30 PM"}
+                ],
+            })
+        elif cmd == "vip_rules":
+            self._send_json({
+                "ok": True,
+                "rule": {"id": payload.get("rule_id", "vip_1"), "name": payload.get("name", "Outlook VIP")},
+            })
+        elif cmd == "contacts":
+            self._send_json({
+                "ok": True,
+                "count": 1,
+                "contacts": [{"id": "1", "name": "Marcus Rivera", "emails": ["mrivera@schools.nyc.gov"], "phones": ["+15550199"]}],
+            })
+        elif cmd == "device_calendar":
+            self._send_json({
+                "ok": True,
+                "count": 2,
+                "events": [
+                    {"event_id": 10, "title": "12th Grade Team Sync", "account_name": "outlook", "begin_ms": 1700003600000, "end_ms": 1700007200000},
+                    {"event_id": 11, "title": "Dentist", "account_name": "geovanierosario17@gmail.com", "begin_ms": 1700014400000, "end_ms": 1700018000000},
+                ],
+            })
+        elif cmd == "alarms":
+            self._send_json({
+                "ok": True,
+                "action": payload.get("action"),
+                "alarm": {"id": payload.get("alarm_id", "morning_brief"), "repeat_daily": True},
+            })
+        elif cmd == "location":
+            self._send_json({
+                "ok": True,
+                "latitude": 40.6892,
+                "longitude": -73.8165,
+                "accuracy_m": 12.5,
+                "provider": "fused",
+            })
+        elif cmd == "comms_history":
+            if payload.get("kind") == "calls":
+                self._send_json({"ok": True, "count": 1, "calls": [{"number": "+15550199", "type": "missed", "duration_sec": 0}]})
+            else:
+                self._send_json({"ok": True, "count": 1, "messages": [{"address": "+15550199", "body": "Running 5m late", "direction": "inbox"}]})
         else:
             self._send_json({"ok": False, "error": f"unknown command: {cmd}"})
 
@@ -385,9 +432,15 @@ class TestMcpAndroidServer(unittest.TestCase):
             "android_apps",
             "android_intent",
             "android_notifications",
+            "android_contacts",
+            "android_device_calendar",
+            "android_alarms",
+            "android_location",
+            "android_comms_history",
+            "android_memory",
         }
         self.assertEqual(names, expected_tools)
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 26)
         for t in tools:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertIn("properties", t["inputSchema"])
@@ -592,6 +645,89 @@ class TestMcpAndroidServer(unittest.TestCase):
         self.assertFalse(is_err)
         self.assertEqual(nreply_res["action"], "reply")
 
+        # 13. Proactive Personal & Career Assistant tools (history, vip_rules, contacts, calendar, alarms, location, comms, memory)
+        nhist_res, is_err = self._call_tool(29, "android_notifications", {"action": "history", "query": "Principal"})
+        self.assertFalse(is_err)
+        self.assertEqual(nhist_res["count"], 1)
+
+        vip_res, is_err = self._call_tool(30, "android_notifications", {
+            "action": "vip_rules",
+            "rule_action": "add",
+            "rule_id": "vip_outlook",
+            "name": "Outlook Principal",
+            "package_contains": "outlook",
+            "wake_ai": True,
+        })
+        self.assertFalse(is_err)
+        self.assertEqual(vip_res["rule"]["id"], "vip_outlook")
+
+        ct_res, is_err = self._call_tool(31, "android_contacts", {"action": "search", "query": "Marcus"})
+        self.assertFalse(is_err)
+        self.assertEqual(ct_res["contacts"][0]["name"], "Marcus Rivera")
+
+        cal_res, is_err = self._call_tool(32, "android_device_calendar", {"action": "events", "days_ahead": 2})
+        self.assertFalse(is_err)
+        self.assertEqual(cal_res["count"], 2)
+
+        alm_res, is_err = self._call_tool(33, "android_alarms", {
+            "action": "schedule_exact",
+            "alarm_id": "morning_brief",
+            "hour": 6,
+            "minute": 45,
+            "repeat_daily": True,
+        })
+        self.assertFalse(is_err)
+        self.assertTrue(alm_res["alarm"]["repeat_daily"])
+
+        loc_res, is_err = self._call_tool(34, "android_location", {"fresh": False})
+        self.assertFalse(is_err)
+        self.assertAlmostEqual(loc_res["latitude"], 40.6892, places=3)
+
+        sms_res, is_err = self._call_tool(35, "android_comms_history", {"kind": "sms", "limit": 5})
+        self.assertFalse(is_err)
+        self.assertEqual(sms_res["count"], 1)
+
+        calls_res, is_err = self._call_tool(36, "android_comms_history", {"kind": "calls", "missed_only": True})
+        self.assertFalse(is_err)
+        self.assertEqual(calls_res["calls"][0]["type"], "missed")
+
+        # Real SQLite FTS5 Second Brain memory lifecycle
+        mem_up, is_err = self._call_tool(37, "android_memory", {
+            "action": "upsert",
+            "category": "career_win",
+            "key": "epic_hall_pass_launch",
+            "title": "Launched Epic Hall Pass",
+            "content": "Built and rolled out digital hall pass system for EPIC High School South.",
+            "tags": ["edtech", "leadership"],
+        })
+        self.assertFalse(is_err)
+        mem_id = mem_up["memory"]["id"]
+        self.assertTrue(os.path.isfile(mem_up["snapshot_path"]))
+
+        self._call_tool(38, "android_memory", {
+            "action": "upsert",
+            "category": "commitment",
+            "title": "Send Baseline B comparison",
+            "content": "Share 12th grade baseline delta table with AP.",
+            "due_at": "2026-11-26",
+        })
+
+        mem_search, is_err = self._call_tool(39, "android_memory", {
+            "action": "search",
+            "query": "Hall Pass",
+        })
+        self.assertFalse(is_err)
+        self.assertGreaterEqual(mem_search["count"], 1)
+
+        mem_digest, is_err = self._call_tool(40, "android_memory", {"action": "briefing_digest"})
+        self.assertFalse(is_err)
+        self.assertEqual(len(mem_digest["recent_career_wins"]), 1)
+        self.assertEqual(len(mem_digest["open_commitments"]), 1)
+
+        mem_del, is_err = self._call_tool(41, "android_memory", {"action": "delete", "id": mem_id})
+        self.assertFalse(is_err)
+        self.assertEqual(mem_del["deleted"], 1)
+
     def test_error_handling(self):
         # Unknown method
         err_resp = self._rpc({"jsonrpc": "2.0", "id": 100, "method": "nonexistent/method"})
@@ -625,7 +761,14 @@ class TestPackSeedSkills(unittest.TestCase):
         try:
             copied = pack_seed.pack_seed(src_seed, tmp_out)
             self.assertIn("AGENTS.md", copied)
-            for skill in ("android-device", "android-browser", "android-daemon", "android-phone-agent"):
+            for skill in (
+                "android-device",
+                "android-browser",
+                "android-daemon",
+                "android-phone-agent",
+                "executive-assistant",
+                "career-edtech-copilot",
+            ):
                 rel = f"skills/{skill}/SKILL.md"
                 self.assertIn(rel, copied)
                 full = os.path.join(tmp_out, "skills", skill, "SKILL.md")

@@ -127,8 +127,9 @@ graph TD
 | `vibrate` | `DeviceHandler` | Тактильный отклик (Haptic Feedback) заданной длительности. |
 | `toast` | `DeviceHandler` | Отображение нативных всплывающих сообщений (Toast). |
 | `ui_status` / `ui_tree` / `ui_action` / `ui_screenshot` | `PhoneAgentHandler` (`AgyAccessibilityService`) | Межприложенческий Phone Agent: семантическое дерево UI, клики/ввод текста/скролл/жесты, глобальная навигация и нативные скриншоты API 30+ без ADB/Shizuku. |
-| `notifications_list` / `notification_action` | `PhoneAgentHandler` (`AgyNotificationListenerService`) | Чтение активных уведомлений сторонних приложений, открытие `contentIntent`, закрытие и отправка быстрых inline-ответов (`RemoteInput`). |
+| `notifications_list` / `notification_action` / `notification_history` / `vip_rules` | `PhoneAgentHandler` (`AgyNotificationListenerService`) | Чтение активных и исторических уведомлений (`notification_history.jsonl`), VIP-правила пробуждения ИИ с бюджетом прерываний и отправка inline-ответов (`RemoteInput`). |
 | `apps_list` / `app_launch` / `send_intent` / `open_settings` | `PhoneAgentHandler` | Поиск и запуск установленных приложений, отправка системных `Intent` / deep-link URI и переход к экранам настроек Android. |
+| `contacts` / `device_calendar` / `alarms` / `location` / `comms_history` / `assistant_permissions` | `PersonalAssistantHandler` (`ProactiveAlarmReceiver`, `PermissionRequestActivity`) | Персональный ассистент: контакты (`ContactsContract`), единый календарь устройства (`CalendarContract`: Outlook + Google + Samsung), точные будильники `AlarmManager`, геолокация и история SMS/вызовов. |
 | `exec` | `ExecHandler` | Выполнение команд в шелле (`/system/bin/sh` или повышенный `rish` через Shizuku) с лимитом вывода `256 КБ`, закрытием `stdin`, принудительным `destroyForcibly()` по таймауту и захватом потоков. |
 | `/gateway/status` | `SystemGatewayServer` | Проверка состояния шлюза (health check). |
 | `/gateway/logs` | `SystemGatewayServer` | Чтение последних строк системного лога из кольцевого буфера памяти. |

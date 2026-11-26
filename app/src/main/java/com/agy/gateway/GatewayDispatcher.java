@@ -24,6 +24,7 @@ public final class GatewayDispatcher {
     private final com.agy.log.CommandHistory commandHistory;
     private final ExecHandler execHandler;
     private final PhoneAgentHandler phoneAgentHandler;
+    private final PersonalAssistantHandler personalAssistantHandler;
 
     public GatewayDispatcher(Context context, LogRingBuffer logBuffer) {
         this.appContext = context.getApplicationContext();
@@ -37,6 +38,7 @@ public final class GatewayDispatcher {
         this.commandHistory = new com.agy.log.CommandHistory();
         this.execHandler = new ExecHandler(context, this.commandHistory, logBuffer);
         this.phoneAgentHandler = new PhoneAgentHandler(context);
+        this.personalAssistantHandler = new PersonalAssistantHandler(context);
     }
 
     public JSONObject dispatch(String command, JSONObject payload) {
@@ -90,6 +92,28 @@ public final class GatewayDispatcher {
                 return phoneAgentHandler.handleSendIntent(payload);
             case "open_settings":
                 return phoneAgentHandler.handleOpenSettings(payload);
+            case "notification_history":
+                try {
+                    payload.put("history", true);
+                } catch (Exception ignored) {}
+                return phoneAgentHandler.handleNotificationsList(payload);
+            case "vip_rules":
+                try {
+                    payload.put("action", "vip_rules");
+                } catch (Exception ignored) {}
+                return phoneAgentHandler.handleNotificationAction(payload);
+            case "contacts":
+                return personalAssistantHandler.handleContacts(payload);
+            case "device_calendar":
+                return personalAssistantHandler.handleCalendar(payload);
+            case "alarms":
+                return personalAssistantHandler.handleAlarms(payload);
+            case "location":
+                return personalAssistantHandler.handleLocation(payload);
+            case "comms_history":
+                return personalAssistantHandler.handleCommsHistory(payload);
+            case "assistant_permissions":
+                return personalAssistantHandler.handlePermissions(payload);
             case "logs":
                 JSONObject logsResp = new JSONObject();
                 try {

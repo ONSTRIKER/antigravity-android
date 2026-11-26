@@ -63,6 +63,10 @@ public final class CoreServerService extends Service {
         supervisor.start();
 
         startBackgroundDaemon();
+        try {
+            ProactiveAlarmReceiver.restorePersistedAlarms(this);
+        } catch (Throwable ignored) {
+        }
     }
 
     private void startBackgroundDaemon() {
@@ -70,14 +74,18 @@ public final class CoreServerService extends Service {
             try {
                 // Give runtime environment a brief moment to stabilize
                 Thread.sleep(1500);
-                File daemonBin = new File(getFilesDir(), "usr/bin/agy-daemon");
-                if (daemonBin.canExecute()) {
-                    Log.i(TAG, "Starting autonomous background daemon...");
-                    ProcessBuilder pb = new ProcessBuilder(daemonBin.getAbsolutePath(), "start");
-                    pb.directory(getFilesDir());
-                    pb.environment().put("PATH", getFilesDir().getAbsolutePath() + "/usr/bin:" + System.getenv("PATH"));
-                    pb.environment().put("HOME", getFilesDir().getAbsolutePath());
-                    pb.environment().put("PREFIX", new File(getFilesDir(), "usr").getAbsolutePath());
+                File filesDir = getFilesDir();
+                File prefix = new File(filesDir, "usr");
+                File pythonBin = new File(prefix, "bin/python3");
+                File daemonScript = new File(prefix, "bin/agy-daemon");
+                if (pythonBin.canExecute() && daemonScript.isFile()) {
+                    Log.i(TAG, "Starting autonomous background daemon via Bionic python3...");
+                    ProcessBuilder pb = new ProcessBuilder(
+                            pythonBin.getAbsolutePath(),
+                            daemonScript.getAbsolutePath(),
+                            "start");
+                    pb.directory(filesDir);
+                    configureBionicDaemonEnv(pb, filesDir, prefix);
                     pb.start();
                 }
             } catch (Exception e) {
@@ -88,14 +96,18 @@ public final class CoreServerService extends Service {
 
     private void stopBackgroundDaemon() {
         try {
-            File daemonBin = new File(getFilesDir(), "usr/bin/agy-daemon");
-            if (daemonBin.canExecute()) {
+            File filesDir = getFilesDir();
+            File prefix = new File(filesDir, "usr");
+            File pythonBin = new File(prefix, "bin/python3");
+            File daemonScript = new File(prefix, "bin/agy-daemon");
+            if (pythonBin.canExecute() && daemonScript.isFile()) {
                 Log.i(TAG, "Stopping autonomous background daemon...");
-                ProcessBuilder pb = new ProcessBuilder(daemonBin.getAbsolutePath(), "stop");
-                pb.directory(getFilesDir());
-                pb.environment().put("PATH", getFilesDir().getAbsolutePath() + "/usr/bin:" + System.getenv("PATH"));
-                pb.environment().put("HOME", getFilesDir().getAbsolutePath());
-                pb.environment().put("PREFIX", new File(getFilesDir(), "usr").getAbsolutePath());
+                ProcessBuilder pb = new ProcessBuilder(
+                        pythonBin.getAbsolutePath(),
+                        daemonScript.getAbsolutePath(),
+                        "stop");
+                pb.directory(filesDir);
+                configureBionicDaemonEnv(pb, filesDir, prefix);
                 Process p = pb.start();
                 if (!p.waitFor(1500, TimeUnit.MILLISECONDS)) {
                     Log.w(TAG, "agy-daemon stop timed out after 1500ms; destroying forcibly");
@@ -105,6 +117,19 @@ public final class CoreServerService extends Service {
         } catch (Exception e) {
             Log.w(TAG, "Failed to stop agy-daemon: " + e.getMessage());
         }
+    }
+
+    private void configureBionicDaemonEnv(ProcessBuilder pb, File filesDir, File prefix) {
+        java.util.Map<String, String> env = pb.environment();
+        env.put("HOME", filesDir.getAbsolutePath());
+        env.put("PREFIX", prefix.getAbsolutePath());
+        env.put("AGY_APPLICATION_ID", getPackageName());
+        env.put("LD_LIBRARY_PATH", new File(prefix, "lib").getAbsolutePath());
+        env.put("PATH", new File(prefix, "bin").getAbsolutePath()
+                + ":" + new File(filesDir, "runtime/bin").getAbsolutePath()
+                + ":/system/bin");
+        env.put("SSL_CERT_FILE", new File(prefix, "etc/tls/cert.pem").getAbsolutePath());
+        env.put("OPENSSL_CONF", new File(prefix, "etc/tls/openssl.cnf").getAbsolutePath());
     }
 
     private void onSupervisorTerminated() {
